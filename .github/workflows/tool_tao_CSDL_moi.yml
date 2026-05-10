@@ -20,14 +20,14 @@ jobs:
           supabase init
           mkdir -p supabase/migrations
 
-      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC (SỬA LỖI UNKNOWN FLAG) ---
+      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC (SỬA LỖI TENANT NOT FOUND) ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
+          ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # Sửa lỗi: Bỏ --schema-only, dùng -s public để lấy cấu trúc schema public
-          # Chú ý: Nếu mật khẩu có ký tự đặc biệt, hãy đặt trong nháy đơn hoặc mã hóa %
-          supabase db dump --db-url "postgresql://postgres:$MK_GOC@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres" -s public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Chú ý quan trọng: User phải là postgres.ID_DỰ_ÁN khi dùng Pooler cổng 6543
+          supabase db dump --db-url "postgresql://postgres.$ID_GOC:$MK_GOC@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres" -s public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       # --- GIAI ĐOẠN 2: TRIỂN KHAI SANG DỰ ÁN MỚI ---
       - name: Đẩy cấu trúc sang Dự án Mới
@@ -40,7 +40,7 @@ jobs:
           rm -rf .supabase/project-ref
           supabase link --project-ref "$ID_MOI" --password "$MK_MOI"
           
-          # Đẩy cấu trúc lên trường mới
+          # Đẩy cấu trúc lên (Sử dụng --linked để xác nhận)
           supabase db push --linked
 
       - name: Lưu trữ bản mẫu vào GitHub
@@ -48,5 +48,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc mẫu chuẩn hóa ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc mẫu Singapore ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
