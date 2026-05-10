@@ -20,17 +20,17 @@ jobs:
           supabase init
           mkdir -p supabase/migrations
 
-      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC (DÙNG KẾT NỐI TRỰC TIẾP 5432) ---
+      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC (ÉP SỬ DỤNG IPV4) ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # Sử dụng cổng 5432 và địa chỉ db trực tiếp để tránh lỗi Pooler
-          # Cấu trúc: db.project-id.supabase.co
-          supabase db dump --db-url "postgresql://postgres:$MK_GOC@db.$ID_GOC.supabase.co:5432/postgres" -s public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Dùng cổng 6543 nhưng ép qua IPv4 bằng cách thay đổi địa chỉ kết nối
+          # Chú ý: postgres.ID_GOC là bắt buộc khi dùng Pooler
+          supabase db dump --db-url "postgresql://postgres.$ID_GOC:$MK_GOC@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=disable" -s public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
-          # Dọn dẹp các lệnh liên quan đến quyền (Grant/Revoke) để tránh lỗi khi đẩy sang dự án mới
+          # Dọn dẹp rác hệ thống trong file SQL
           sed -i '/^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       # --- GIAI ĐOẠN 2: TRIỂN KHAI SANG DỰ ÁN MỚI ---
@@ -44,7 +44,7 @@ jobs:
           rm -rf .supabase/project-ref
           supabase link --project-ref "$ID_MOI" --password "$MK_MOI"
           
-          # Đẩy cấu trúc lên (Skip-validations để tránh dừng lại do lỗi nhỏ)
+          # Đẩy cấu trúc lên trường mới
           supabase db push --linked
 
       - name: Lưu trữ bản mẫu vào GitHub
@@ -52,5 +52,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc mẫu chuẩn hóa ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc nhân bản IPv4 ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
