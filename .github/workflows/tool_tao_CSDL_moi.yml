@@ -15,19 +15,19 @@ jobs:
           curl -L https://github.com/supabase/cli/releases/latest/download/supabase_linux_amd64.tar.gz | tar xz
           sudo mv supabase /usr/local/bin/
 
-      - name: Khởi tạo Supabase
+      - name: Khởi tạo dự án
         run: |
           supabase init
-          # Tạo thư mục migrations thủ công để tránh lỗi No such file or directory
           mkdir -p supabase/migrations
 
-      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC ---
+      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC (SỬA LỖI UNKNOWN FLAG) ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
         run: |
-          # Lưu ý: Thay đổi Host bên dưới nếu bạn không dùng vùng Singapore (ap-southeast-1)
-          supabase db dump --db-url "postgresql://postgres:$MK_GOC@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres" --schema public --schema-only > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Sửa lỗi: Bỏ --schema-only, dùng -s public để lấy cấu trúc schema public
+          # Chú ý: Nếu mật khẩu có ký tự đặc biệt, hãy đặt trong nháy đơn hoặc mã hóa %
+          supabase db dump --db-url "postgresql://postgres:$MK_GOC@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres" -s public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       # --- GIAI ĐOẠN 2: TRIỂN KHAI SANG DỰ ÁN MỚI ---
       - name: Đẩy cấu trúc sang Dự án Mới
@@ -37,11 +37,10 @@ jobs:
           MK_MOI: ${{ secrets.TARGET_DB_PASSWORD }}
         run: |
           supabase login --token "$MA_TRUY_CAP"
-          # Hủy liên kết cũ (nếu có) và liên kết dự án mới
           rm -rf .supabase/project-ref
           supabase link --project-ref "$ID_MOI" --password "$MK_MOI"
           
-          # Đẩy cấu trúc lên (Sử dụng --linked để xác nhận đẩy vào dự án đã link)
+          # Đẩy cấu trúc lên trường mới
           supabase db push --linked
 
       - name: Lưu trữ bản mẫu vào GitHub
@@ -49,5 +48,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc mẫu ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc mẫu chuẩn hóa ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
