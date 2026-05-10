@@ -10,9 +10,8 @@ jobs:
       - name: Kiểm tra mã nguồn (Checkout)
         uses: actions/checkout@v4
 
-      - name: Cài đặt PostgreSQL Client 17 & Supabase CLI
+      - name: Cài đặt PostgreSQL Client 17
         run: |
-          # 1. Cài đặt đúng pg_dump bản 17 để khớp với Supabase
           sudo apt-get update
           sudo apt-get install -y curl ca-certificates
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -20,46 +19,35 @@ jobs:
           sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
-          
-          # 2. Cài Supabase CLI
-          curl -L https://github.com/supabase/cli/releases/latest/download/supabase_linux_amd64.tar.gz | tar xz
-          sudo mv supabase /usr/local/bin/
 
       - name: Khởi tạo thư mục
-        run: |
-          supabase init
-          mkdir -p supabase/migrations
+        run: mkdir -p supabase/migrations
 
-      # --- GIAI ĐOẠN 1: TRÍCH XUẤT (PG 17 & POOLER AWS-1) ---
+      # --- GIAI ĐOẠN 1: TRÍCH XUẤT TỪ DỰ ÁN GỐC ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # Gọi trực tiếp đường dẫn của pg_dump bản 17
           /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres.$ID_GOC:$MK_GOC@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
-          # Dọn dẹp quyền hạn và extension để sang nhà mới không bị lỗi
+          # Dọn dẹp lệnh phân quyền
           sed -i '/^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
-      # --- GIAI ĐOẠN 2: TRIỂN KHAI SANG DỰ ÁN MỚI ---
+      # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI (DÙNG PSQL TRỰC TIẾP, BỎ QUA SUPABASE CLI) ---
       - name: Đẩy cấu trúc sang Dự án Mới
         env:
-          MA_TRUY_CAP: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           ID_MOI: ${{ secrets.TARGET_PROJECT_ID }}
           MK_MOI: ${{ secrets.TARGET_DB_PASSWORD }}
         run: |
-          supabase login --token "$MA_TRUY_CAP"
-          rm -rf .supabase/project-ref
-          supabase link --project-ref "$ID_MOI" --password "$MK_MOI"
-          
-          # Đẩy cấu trúc lên trường mới
-          supabase db push --linked
+          # Dùng công cụ psql gốc để chạy file SQL thẳng vào dự án mới (Khuyên dùng aws-0 hoặc aws-1 tùy dự án mới của bạn nằm ở cụm nào)
+          # Lưu ý: Cú pháp kết nối cũng tương tự dự án gốc
+          /usr/lib/postgresql/17/bin/psql "postgresql://postgres.$ID_MOI:$MK_MOI@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       - name: Lưu trữ bản mẫu
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc thành công (PG17) ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc bằng công cụ gốc PG17 ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
