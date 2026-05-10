@@ -32,10 +32,11 @@ jobs:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres.$ID_GOC:$MK_GOC@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Thêm --clean và --if-exists để file SQL tự động xóa đè dữ liệu rác ở trường mới (nếu có)
+          /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres.$ID_GOC:$MK_GOC@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" --schema-only --schema=public --clean --if-exists > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
-          # Dọn dẹp toàn bộ lệnh phân quyền, schema thừa và default privileges
-          sed -i '/^CREATE SCHEMA/d; /^ALTER SCHEMA/d; /^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d; /^ALTER DEFAULT PRIVILEGES/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Dọn dẹp cả lệnh CREATE và DROP của các thành phần hệ thống để tránh xung đột
+          sed -i '/^CREATE SCHEMA/d; /^DROP SCHEMA/d; /^ALTER SCHEMA/d; /^CREATE ROLE/d; /^DROP ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d; /^DROP EXTENSION/d; /^ALTER DEFAULT PRIVILEGES/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI ---
       - name: Đẩy cấu trúc sang Dự án Mới
@@ -44,7 +45,6 @@ jobs:
           MK_MOI: ${{ secrets.TARGET_DB_PASSWORD }}
         run: |
           # Dùng công cụ psql gốc để chạy file SQL thẳng vào dự án mới
-          # Đã bổ sung ON_ERROR_STOP=1 để dừng ngay nếu có lỗi SQL
           /usr/lib/postgresql/17/bin/psql "postgresql://postgres.$ID_MOI:$MK_MOI@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" -v ON_ERROR_STOP=1 -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       - name: Lưu trữ bản mẫu
@@ -52,5 +52,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc chuẩn sạch PG17 ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc ghi đè an toàn PG17 ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
