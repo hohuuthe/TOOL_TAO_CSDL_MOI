@@ -1,55 +1,55 @@
-name: Auto tao CSDL moi
+name: Tự động Nhân bản Cấu trúc Supabase
 
 on:
-  workflow_dispatch: # Kích hoạt thủ công khi bạn có trường mới
+  workflow_dispatch: # Kích hoạt thủ công khi bạn có thêm trường mới
 
 jobs:
-  clone_process:
+  quy_trinh_nhan_ban:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Kiểm tra mã nguồn (Checkout)
         uses: actions/checkout@v4
 
-      - name: Install Supabase CLI
+      - name: Cài đặt Supabase CLI
         run: |
           curl -L https://github.com/supabase/cli/releases/latest/download/supabase_linux_amd64.tar.gz | tar xz
           sudo mv supabase /usr/local/bin/
 
-      - name: Initialize & Login
+      - name: Khởi tạo và Đăng nhập
         env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          MA_TRUY_CAP_SUPABASE: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase init
-          supabase login --token "$SUPABASE_ACCESS_TOKEN"
+          supabase login --token "$MA_TRUY_CAP_SUPABASE"
 
-      # --- GIAI ĐOẠN 1: LẤY CẤU TRÚC TỪ DỰ ÁN GỐC ---
-      - name: Pull Schema from Source
+      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC TỪ DỰ ÁN GỐC (TRƯỜNG MẪU) ---
+      - name: Lấy cấu trúc từ Dự án Gốc
         env:
-          PROJECT_ID: ${{ secrets.SOURCE_PROJECT_ID }}
-          DB_PASSWORD: ${{ secrets.SOURCE_DB_PASSWORD }}
+          ID_DU_AN_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
+          MAT_KHAU_CSDL_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
         run: |
-          supabase link --project-ref "$PROJECT_ID" --password "$DB_PASSWORD"
-          # Lấy toàn bộ cấu trúc bảng, RLS, Functions về máy ảo GitHub
+          supabase link --project-ref "$ID_DU_AN_GOC" --password "$MAT_KHAU_CSDL_GOC"
+          # Lấy toàn bộ định nghĩa bảng, RLS, hàm xử lý (không lấy dữ liệu)
           supabase db pull
 
-      # --- GIAI ĐOẠN 2: ĐẨY CẤU TRÚC SANG DỰ ÁN MỚI ---
-      - name: Push Schema to Target
+      # --- GIAI ĐOẠN 2: TRIỂN KHAI SANG DỰ ÁN MỚI (TRƯỜNG MỚI) ---
+      - name: Đẩy cấu trúc sang Dự án Mới
         env:
-          PROJECT_ID: ${{ secrets.TARGET_PROJECT_ID }}
-          DB_PASSWORD: ${{ secrets.TARGET_DB_PASSWORD }}
+          ID_DU_AN_MOI: ${{ secrets.TARGET_PROJECT_ID }}
+          MAT_KHAU_CSDL_MOI: ${{ secrets.TARGET_DB_PASSWORD }}
         run: |
-          # Hủy liên kết cũ và liên kết tới dự án mới
+          # Hủy liên kết cũ để trỏ sang dự án trường mới
           rm -rf .supabase/project-ref
-          supabase link --project-ref "$PROJECT_ID" --password "$DB_PASSWORD"
+          supabase link --project-ref "$ID_DU_AN_MOI" --password "$MAT_KHAU_CSDL_MOI"
           
-          # Đẩy toàn bộ cấu trúc lên dự án mới (Không bao gồm dữ liệu)
+          # Đẩy toàn bộ cấu trúc lên (Tạo bảng, Trigger, khóa ngoại CASCADE...)
           supabase db push
 
-      # --- GIAI ĐOẠN 3: LƯU TRỮ MẪU (OPTIONAL) ---
-      - name: Save Schema to Repo
+      # --- GIAI ĐOẠN 3: LƯU TRỮ BẢN MẪU VÀO GITHUB (TÙY CHỌN) ---
+      - name: Lưu trữ cấu trúc vào Repository
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/migrations/
-          git commit -m "chore: cập nhật bản mẫu cấu trúc $(date +'%Y-%m-%d')" || echo "No changes"
+          git commit -m "chore: cập nhật bản mẫu cấu trúc ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
