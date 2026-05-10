@@ -20,17 +20,17 @@ jobs:
           supabase init
           mkdir -p supabase/migrations
 
-      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC (ÉP SỬ DỤNG IPV4) ---
+      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # Dùng cổng 6543 nhưng ép qua IPv4 bằng cách thay đổi địa chỉ kết nối
-          # Chú ý: postgres.ID_GOC là bắt buộc khi dùng Pooler
-          supabase db dump --db-url "postgresql://postgres.$ID_GOC:$MK_GOC@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=disable" -s public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Ép kiểu kết nối chính xác cho Pooler tại Singapore
+          # Chúng ta dùng "postgres.ID_GOC" làm user
+          supabase db dump --db-url "postgresql://postgres.$ID_GOC:$MK_GOC@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres" -s public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
-          # Dọn dẹp rác hệ thống trong file SQL
+          # Dọn dẹp các lệnh thừa gây lỗi khi sang dự án mới
           sed -i '/^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       # --- GIAI ĐOẠN 2: TRIỂN KHAI SANG DỰ ÁN MỚI ---
@@ -52,5 +52,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc nhân bản IPv4 ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc mẫu chuẩn Singapore ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
