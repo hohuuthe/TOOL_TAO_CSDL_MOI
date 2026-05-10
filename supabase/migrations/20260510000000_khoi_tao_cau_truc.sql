@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict kITZUTGHOqTi4bl1ZsR2d61dtPIfcMNVHLeJf3Sm7xLtzx07Uf4ZY1ZvhAa8rEI
+\restrict EHfbL7MUgBPHjnGsAtlHWDPeUuHadVkxDKhyqT7CAYIHfljqLfhTsvxonhpRaEi
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.9 (Ubuntu 17.9-1.pgdg24.04+1)
@@ -1710,5 +1710,5 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict kITZUTGHOqTi4bl1ZsR2d61dtPIfcMNVHLeJf3Sm7xLtzx07Uf4ZY1ZvhAa8rEI
+\unrestrict EHfbL7MUgBPHjnGsAtlHWDPeUuHadVkxDKhyqT7CAYIHfljqLfhTsvxonhpRaEi
 
