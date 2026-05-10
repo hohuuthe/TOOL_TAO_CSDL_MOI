@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict wn3X50aDIqRMSDCIwYYcSeU49NRsLa7K2VK18YmDguvmotxcRnBDqevkFnSlkh5
+\restrict R0Gurl1hjbgqErKZoVEsb8UFGaoU2LSIzHRIOgJdleIoTQx54YXj8wY1XPNimae
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.9 (Ubuntu 17.9-1.pgdg24.04+1)
@@ -1586,10 +1586,10 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict wn3X50aDIqRMSDCIwYYcSeU49NRsLa7K2VK18YmDguvmotxcRnBDqevkFnSlkh5
+\unrestrict R0Gurl1hjbgqErKZoVEsb8UFGaoU2LSIzHRIOgJdleIoTQx54YXj8wY1XPNimae
 
 
--- Khởi tạo tài khoản quản trị mặc định
+-- 1. Khởi tạo tài khoản quản trị
 INSERT INTO public.taikhoan (username, password, fullname, role, chidoan_id)
 VALUES (
     'Admin', 
@@ -1598,3 +1598,26 @@ VALUES (
     'Admin', 
     NULL
 ) ON CONFLICT (username) DO NOTHING;
+
+-- 2. Khởi tạo bảng duy trì CSDL
+INSERT INTO public.duytricsdl (so) 
+VALUES (1) 
+ON CONFLICT DO NOTHING;
+
+-- 3. Khởi tạo cấu hình GitHub
+INSERT INTO public.github_settings (
+    id, 
+    github_repo_path, 
+    github_branch, 
+    github_workflow_file, 
+    github_restore_workflow_file, 
+    github_token
+)
+VALUES (
+    'project_02',
+    'congty/du_an_backend',
+    'main',
+    'supabase-backup.yml',
+    'supabase-restore.yml',
+    'ghp_abc123...'
+) ON CONFLICT (id) DO NOTHING;
