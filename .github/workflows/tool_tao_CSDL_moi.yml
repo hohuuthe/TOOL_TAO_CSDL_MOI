@@ -6,7 +6,7 @@ on:
 jobs:
   quy_trinh_nhan_ban:
     runs-on: ubuntu-latest
-    # Cấp quyền ghi để Bot có thể lưu file vào GitHub
+    # THÊM 2 DÒNG NÀY ĐỂ CẤP QUYỀN CHO BOT
     permissions:
       contents: write
     steps:
@@ -26,37 +26,33 @@ jobs:
       - name: Khởi tạo thư mục
         run: mkdir -p supabase/migrations
 
-      # --- GIAI ĐOẠN 1: TRÍCH XUẤT VÀ BỔ SUNG DỮ LIỆU ---
+      # --- GIAI ĐOẠN 1: TRÍCH XUẤT TỪ DỰ ÁN GỐC ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # 1. Trích xuất cấu trúc nguyên bản (Không dùng --clean)
           /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres.$ID_GOC:$MK_GOC@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
-          # 2. Bổ sung tài khoản Admin vào cuối file (Không dùng sed dọn dẹp)
-          # Sử dụng <<'EOF' để giữ nguyên các ký tự đặc biệt trong mật khẩu
-          cat >> supabase/migrations/20260510000000_khoi_tao_cau_truc.sql <<'EOF'
-
--- Khởi tạo tài khoản quản trị mặc định
-INSERT INTO public.taikhoan (username, password, fullname, role, chidoan_id)
-VALUES (
-    'Admin', 
+          # Dọn dẹp lệnh phân quyền
+          sed -i '/^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+        INSERT INTO public.taikhoan (username, password, fullname, role, chidoan_id)
+      VALUES (
+          'Admin', 
     '=19=65536,t=3,p=4/+OxXqPO9quBJtU9mjQqcHb6rYNmBxjM', 
     'Quản trị', 
     'Admin', 
     NULL
 ) ON CONFLICT (username) DO NOTHING;
 EOF
-
-      # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI ---
+      # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI (DÙNG PSQL TRỰC TIẾP, BỎ QUA SUPABASE CLI) ---
       - name: Đẩy cấu trúc sang Dự án Mới
         env:
           ID_MOI: ${{ secrets.TARGET_PROJECT_ID }}
           MK_MOI: ${{ secrets.TARGET_DB_PASSWORD }}
         run: |
-          # Chạy trực tiếp file SQL vào dự án mới
+          # Dùng công cụ psql gốc để chạy file SQL thẳng vào dự án mới (Khuyên dùng aws-0 hoặc aws-1 tùy dự án mới của bạn nằm ở cụm nào)
+          # Lưu ý: Cú pháp kết nối cũng tương tự dự án gốc
           /usr/lib/postgresql/17/bin/psql "postgresql://postgres.$ID_MOI:$MK_MOI@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       - name: Lưu trữ bản mẫu
@@ -64,5 +60,5 @@ EOF
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc và admin nguyên bản ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc bằng công cụ gốc PG17 ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
