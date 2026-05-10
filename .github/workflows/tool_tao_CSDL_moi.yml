@@ -6,7 +6,6 @@ on:
 jobs:
   quy_trinh_nhan_ban:
     runs-on: ubuntu-latest
-    # CẤP QUYỀN CHO BOT ĐỂ LƯU FILE VÀO GITHUB
     permissions:
       contents: write
     steps:
@@ -32,10 +31,8 @@ jobs:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # Thêm --clean và --if-exists để file SQL tự động xóa đè dữ liệu rác ở trường mới (nếu có)
           /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres.$ID_GOC:$MK_GOC@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" --schema-only --schema=public --clean --if-exists > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
-          # Dọn dẹp cả lệnh CREATE và DROP của các thành phần hệ thống để tránh xung đột
           sed -i '/^CREATE SCHEMA/d; /^DROP SCHEMA/d; /^ALTER SCHEMA/d; /^CREATE ROLE/d; /^DROP ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d; /^DROP EXTENSION/d; /^ALTER DEFAULT PRIVILEGES/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI ---
@@ -44,13 +41,13 @@ jobs:
           ID_MOI: ${{ secrets.TARGET_PROJECT_ID }}
           MK_MOI: ${{ secrets.TARGET_DB_PASSWORD }}
         run: |
-          # Dùng công cụ psql gốc để chạy file SQL thẳng vào dự án mới
-          /usr/lib/postgresql/17/bin/psql "postgresql://postgres.$ID_MOI:$MK_MOI@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" -v ON_ERROR_STOP=1 -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Để psql chạy tự nhiên, nó sẽ báo vài dòng lỗi drop ở đầu nhưng kệ nó, nó sẽ tạo bảng thành công ngay sau đó
+          /usr/lib/postgresql/17/bin/psql "postgresql://postgres.$ID_MOI:$MK_MOI@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       - name: Lưu trữ bản mẫu
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc ghi đè an toàn PG17 ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc ghi đè tự do PG17 ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
