@@ -6,6 +6,9 @@ on:
 jobs:
   quy_trinh_nhan_ban:
     runs-on: ubuntu-latest
+    # THÊM 2 DÒNG NÀY ĐỂ CẤP QUYỀN CHO BOT
+    permissions:
+      contents: write
     steps:
       - name: Kiểm tra mã nguồn (Checkout)
         uses: actions/checkout@v4
