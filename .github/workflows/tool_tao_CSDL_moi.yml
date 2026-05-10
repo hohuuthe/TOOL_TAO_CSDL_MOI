@@ -40,39 +40,39 @@ jobs:
           # 3. CHÈN THÊM CÁC DÒNG CẤU HÌNH MẶC ĐỊNH (ADMIN, DUY TRÌ CSDL, GITHUB SETTINGS)
           cat >> supabase/migrations/20260510000000_khoi_tao_cau_truc.sql <<'EOF'
 
--- 1. Khởi tạo tài khoản quản trị
-INSERT INTO public.taikhoan (username, password, fullname, role, chidoan_id)
-VALUES (
-    'Admin', 
-    '$argon2id$v=19$m=65536,t=3,p=4$PUDXJllthdBNREj7Jd2KTw$blk3GJ2W6Jk/+OxXqPO9quBJtU9mjQqcHb6rYNmBxjM', 
-    'Quản trị', 
-    'Admin', 
-    NULL
-) ON CONFLICT (username) DO NOTHING;
-
--- 2. Khởi tạo bảng duy trì CSDL
-INSERT INTO public.duytricsdl (so) 
-VALUES (1) 
-ON CONFLICT DO NOTHING;
-
--- 3. Khởi tạo cấu hình GitHub
-INSERT INTO public.github_settings (
-    id, 
-    github_repo_path, 
-    github_branch, 
-    github_workflow_file, 
-    github_restore_workflow_file, 
-    github_token
-)
-VALUES (
-    'project_02',
-    'congty/du_an_backend',
-    'main',
-    'supabase-backup.yml',
-    'supabase-restore.yml',
-    'ghp_abc123...'
-) ON CONFLICT (id) DO NOTHING;
-EOF
+          -- 1. Khởi tạo tài khoản quản trị
+          INSERT INTO public.taikhoan (username, password, fullname, role, chidoan_id)
+          VALUES (
+              'Admin', 
+              '$argon2id$v=19$m=65536,t=3,p=4$PUDXJllthdBNREj7Jd2KTw$blk3GJ2W6Jk/+OxXqPO9quBJtU9mjQqcHb6rYNmBxjM', 
+              'Quản trị', 
+              'Admin', 
+              NULL
+          ) ON CONFLICT (username) DO NOTHING;
+          
+          -- 2. Khởi tạo bảng duy trì CSDL
+          INSERT INTO public.duytricsdl (so) 
+          VALUES (1) 
+          ON CONFLICT DO NOTHING;
+          
+          -- 3. Khởi tạo cấu hình GitHub
+          INSERT INTO public.github_settings (
+              id, 
+              github_repo_path, 
+              github_branch, 
+              github_workflow_file, 
+              github_restore_workflow_file, 
+              github_token
+          )
+          VALUES (
+              'project_02',
+              'congty/du_an_backend',
+              'main',
+              'supabase-backup.yml',
+              'supabase-restore.yml',
+              'ghp_abc123...'
+          ) ON CONFLICT (id) DO NOTHING;
+          EOF
 
       # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI ---
       - name: Đẩy cấu trúc sang Dự án Mới
