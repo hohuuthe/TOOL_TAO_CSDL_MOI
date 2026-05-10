@@ -10,27 +10,33 @@ jobs:
       - name: Kiểm tra mã nguồn (Checkout)
         uses: actions/checkout@v4
 
-      - name: Cài đặt Supabase CLI
+      - name: Cài đặt PostgreSQL Client (Thay cho Supabase CLI)
+        # Chúng ta dùng công cụ gốc của PostgreSQL để dump cho ổn định
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Cài đặt Supabase CLI (Dành cho việc Push lên dự án mới)
         run: |
           curl -L https://github.com/supabase/cli/releases/latest/download/supabase_linux_amd64.tar.gz | tar xz
           sudo mv supabase /usr/local/bin/
 
-      - name: Khởi tạo dự án
+      - name: Khởi tạo thư mục
         run: |
           supabase init
           mkdir -p supabase/migrations
 
-      # --- GIAI ĐOẠN 1: TRÍCH XUẤT CẤU TRÚC ---
+      # --- GIAI ĐOẠN 1: TRÍCH XUẤT BẰNG PGDUMP GỐC (BỎ QUA URL) ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
-          MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
+          PGPASSWORD: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # Ép kiểu kết nối chính xác cho Pooler tại Singapore
-          # Chúng ta dùng "postgres.ID_GOC" làm user
-          supabase db dump --db-url "postgresql://postgres.$ID_GOC:$MK_GOC@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres" -s public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Sử dụng pg_dump trực tiếp với các tham số rõ ràng
+          # Cổng 5432 (kết nối trực tiếp) và db.ID_GOC.supabase.co
+          pg_dump -h "db.$ID_GOC.supabase.co" -U postgres -p 5432 -d postgres --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
-          # Dọn dẹp các lệnh thừa gây lỗi khi sang dự án mới
+          # Dọn dẹp rác phân quyền
           sed -i '/^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       # --- GIAI ĐOẠN 2: TRIỂN KHAI SANG DỰ ÁN MỚI ---
@@ -44,13 +50,12 @@ jobs:
           rm -rf .supabase/project-ref
           supabase link --project-ref "$ID_MOI" --password "$MK_MOI"
           
-          # Đẩy cấu trúc lên trường mới
           supabase db push --linked
 
-      - name: Lưu trữ bản mẫu vào GitHub
+      - name: Lưu trữ bản mẫu
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add supabase/
-          git commit -m "chore: cập nhật cấu trúc mẫu chuẩn Singapore ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git commit -m "chore: cập nhật cấu trúc bằng pg_dump gốc ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
           git push
