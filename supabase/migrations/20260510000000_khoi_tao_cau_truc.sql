@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict R0Gurl1hjbgqErKZoVEsb8UFGaoU2LSIzHRIOgJdleIoTQx54YXj8wY1XPNimae
+\restrict XPCvfEJixBXUVqxkSRsEatD4tR4uKH4cNg8O3fgBR7jBH5IokUwnkWeIR0tWitk
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.9 (Ubuntu 17.9-1.pgdg24.04+1)
@@ -233,7 +233,6 @@ CREATE TABLE public.doanvien (
     thongtinthem text,
     updatedat timestamp with time zone DEFAULT now(),
     namhoc uuid,
-    hocky text,
     diachi text,
     chidoan_id uuid,
     createdat timestamp with time zone DEFAULT now()
@@ -305,7 +304,6 @@ ALTER TABLE public.github_settings OWNER TO postgres;
 CREATE TABLE public.namhoc (
     id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
     tennamhoc text NOT NULL,
-    isdefault boolean DEFAULT false,
     islocked boolean DEFAULT false,
     updatedat timestamp with time zone DEFAULT now(),
     createdat timestamp with time zone DEFAULT now()
@@ -706,6 +704,14 @@ ALTER TABLE ONLY public.tieuchitd
 
 ALTER TABLE ONLY public.tuanhoc
     ADD CONSTRAINT tuanhoc_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: chamdiem unique_chamdiem_record; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.chamdiem
+    ADD CONSTRAINT unique_chamdiem_record UNIQUE (namhoc, hocky, tuan, thu, ngay, lopcham, chamlop, doanvienid, matieuchi, tentieuchi, loaitieuchi, diemtru, diemcong, chidoan_id);
 
 
 --
@@ -1586,7 +1592,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict R0Gurl1hjbgqErKZoVEsb8UFGaoU2LSIzHRIOgJdleIoTQx54YXj8wY1XPNimae
+\unrestrict XPCvfEJixBXUVqxkSRsEatD4tR4uKH4cNg8O3fgBR7jBH5IokUwnkWeIR0tWitk
 
 
 -- 1. Khởi tạo tài khoản quản trị
