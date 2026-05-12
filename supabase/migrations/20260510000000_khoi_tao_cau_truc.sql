@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict XPCvfEJixBXUVqxkSRsEatD4tR4uKH4cNg8O3fgBR7jBH5IokUwnkWeIR0tWitk
+\restrict HM7EjeihMtXmR0yil0w1CZX8a4dmoGiEeYgZodArwJGljRBkOhESqEJ5ZeV5EfF
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.9 (Ubuntu 17.9-1.pgdg24.04+1)
@@ -306,7 +306,8 @@ CREATE TABLE public.namhoc (
     tennamhoc text NOT NULL,
     islocked boolean DEFAULT false,
     updatedat timestamp with time zone DEFAULT now(),
-    createdat timestamp with time zone DEFAULT now()
+    createdat timestamp with time zone DEFAULT now(),
+    isdefault boolean DEFAULT false
 );
 
 
@@ -814,6 +815,13 @@ CREATE INDEX idx_dotptdoanvien_namhoc ON public.dotptdoanvien USING btree (namho
 
 
 --
+-- Name: idx_namhoc_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE UNIQUE INDEX idx_namhoc_isdefault_true ON public.namhoc USING btree (isdefault) WHERE (isdefault = true);
+
+
+--
 -- Name: idx_phancong_chamlop; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -902,6 +910,13 @@ CREATE INDEX idx_tieuchitd_context ON public.tieuchitd USING btree (namhoc, hock
 --
 
 CREATE INDEX idx_tieuchitd_namhoc ON public.tieuchitd USING btree (namhoc);
+
+
+--
+-- Name: idx_tuan_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE UNIQUE INDEX idx_tuan_isdefault_true ON public.tuanhoc USING btree (isdefault) WHERE (isdefault = true);
 
 
 --
@@ -1592,7 +1607,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict XPCvfEJixBXUVqxkSRsEatD4tR4uKH4cNg8O3fgBR7jBH5IokUwnkWeIR0tWitk
+\unrestrict HM7EjeihMtXmR0yil0w1CZX8a4dmoGiEeYgZodArwJGljRBkOhESqEJ5ZeV5EfF
 
 
 -- 1. Khởi tạo tài khoản quản trị
