@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict HM7EjeihMtXmR0yil0w1CZX8a4dmoGiEeYgZodArwJGljRBkOhESqEJ5ZeV5EfF
+\restrict 0UYeSMvOY5ZctHaUwjbVvSnGBhC9CRngtdw7kIj7dKQcgwKiHMfnKJvAXMmjcPC
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.9 (Ubuntu 17.9-1.pgdg24.04+1)
@@ -1607,7 +1607,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict HM7EjeihMtXmR0yil0w1CZX8a4dmoGiEeYgZodArwJGljRBkOhESqEJ5ZeV5EfF
+\unrestrict 0UYeSMvOY5ZctHaUwjbVvSnGBhC9CRngtdw7kIj7dKQcgwKiHMfnKJvAXMmjcPC
 
 
 -- 1. Khởi tạo tài khoản quản trị
