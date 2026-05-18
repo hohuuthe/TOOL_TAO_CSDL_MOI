@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict 0UYeSMvOY5ZctHaUwjbVvSnGBhC9CRngtdw7kIj7dKQcgwKiHMfnKJvAXMmjcPC
+\restrict 8daL0D6UU1ss8pEKH3Fa1KRFCBaw7bWvdkpVySW5A29cg29Nps3kI9P3kJGad2U
 
 -- Dumped from database version 17.6
--- Dumped by pg_dump version 17.9 (Ubuntu 17.9-1.pgdg24.04+1)
+-- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -1607,7 +1607,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 0UYeSMvOY5ZctHaUwjbVvSnGBhC9CRngtdw7kIj7dKQcgwKiHMfnKJvAXMmjcPC
+\unrestrict 8daL0D6UU1ss8pEKH3Fa1KRFCBaw7bWvdkpVySW5A29cg29Nps3kI9P3kJGad2U
 
 
 -- 1. Khởi tạo tài khoản quản trị
