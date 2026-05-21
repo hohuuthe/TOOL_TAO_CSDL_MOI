@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict pUwXR2wJuSVOw6v1ou8eVpsXAZ8Vv6i3CnaxQjKsrIV9gxY9RKzZExCXqkf4UKM
+\restrict ODbJ7RUaehHz7xay9KrqjfT0q4hLrbvTqSld1DhZGkjZpbATBmYLvKgoR7strpc
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
@@ -32,25 +32,6 @@ SET row_security = off;
 
 COMMENT ON SCHEMA public IS 'standard public schema';
 
-
---
--- Name: delete_cascade_chidoan_logic(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.delete_cascade_chidoan_logic() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    DELETE FROM phancong 
-    -- Bỏ dấu ngoặc kép hoặc dùng đúng tên cột viết thường
-    WHERE (lopcham = OLD.tenchidoan OR chamlop = OLD.tenchidoan) 
-      AND namhoc = OLD.namhoc;
-    RETURN OLD;
-END;
-$$;
-
-
-ALTER FUNCTION public.delete_cascade_chidoan_logic() OWNER TO postgres;
 
 --
 -- Name: handle_chi_doan_deletion(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -125,9 +106,9 @@ CREATE TABLE public.taikhoan (
     password text NOT NULL,
     fullname text NOT NULL,
     role text NOT NULL,
-    chidoan text,
     updatedat timestamp with time zone DEFAULT now(),
-    namhoc text
+    chidoan_id uuid,
+    createdat timestamp with time zone DEFAULT now()
 );
 
 
@@ -167,6 +148,22 @@ $$;
 ALTER FUNCTION public.update_likes_count() OWNER TO postgres;
 
 --
+-- Name: update_modified_column(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.update_modified_column() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.updatedat = now();
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.update_modified_column() OWNER TO postgres;
+
+--
 -- Name: activity_logs; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -181,7 +178,8 @@ CREATE TABLE public.activity_logs (
     description text NOT NULL,
     old_data jsonb,
     new_data jsonb,
-    created_at timestamp with time zone DEFAULT now()
+    created_at timestamp with time zone DEFAULT now(),
+    namhoc uuid
 );
 
 
@@ -193,14 +191,14 @@ ALTER TABLE public.activity_logs OWNER TO postgres;
 
 CREATE TABLE public.chamdiem (
     id text DEFAULT (gen_random_uuid())::text NOT NULL,
-    namhoc text,
+    namhoc uuid,
     hocky text,
     tuan text,
     thu text,
     ngay text,
-    lopcham text,
-    chamlop text,
-    doanvienid text,
+    lopcham uuid,
+    chamlop uuid,
+    doanvienid uuid,
     hotendoanvien text,
     matieuchi text,
     tentieuchi text,
@@ -209,7 +207,9 @@ CREATE TABLE public.chamdiem (
     diemcong numeric DEFAULT 0,
     ghichu text,
     nguoicham text,
-    updatedat timestamp with time zone DEFAULT now()
+    updatedat timestamp with time zone DEFAULT now(),
+    chidoan_id uuid,
+    createdat timestamp with time zone DEFAULT now()
 );
 
 
@@ -232,10 +232,10 @@ CREATE TABLE public.doanvien (
     sdt text,
     thongtinthem text,
     updatedat timestamp with time zone DEFAULT now(),
-    namhoc text,
-    hocky text,
+    namhoc uuid,
     diachi text,
-    chidoan_id uuid
+    chidoan_id uuid,
+    createdat timestamp with time zone DEFAULT now()
 );
 
 
@@ -247,7 +247,7 @@ ALTER TABLE public.doanvien OWNER TO postgres;
 
 CREATE TABLE public.dotptdoanvien (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    namhoc text NOT NULL,
+    namhoc uuid NOT NULL,
     hocky text NOT NULL,
     tendot text NOT NULL,
     tungay text,
@@ -255,7 +255,8 @@ CREATE TABLE public.dotptdoanvien (
     isdefault boolean DEFAULT false,
     islocked boolean DEFAULT false,
     ghichu text,
-    updatedat timestamp with time zone DEFAULT now()
+    updatedat timestamp with time zone DEFAULT now(),
+    createdat timestamp with time zone DEFAULT now()
 );
 
 
@@ -268,7 +269,9 @@ ALTER TABLE public.dotptdoanvien OWNER TO postgres;
 CREATE TABLE public.duytricsdl (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     so bigint DEFAULT 0,
-    thoigian timestamp with time zone DEFAULT now()
+    thoigian timestamp with time zone DEFAULT now(),
+    createdat timestamp with time zone DEFAULT now(),
+    updatedat timestamp with time zone DEFAULT now()
 );
 
 
@@ -286,7 +289,9 @@ CREATE TABLE public.github_settings (
     github_restore_workflow_file text DEFAULT 'supabase-restore.yml'::text,
     github_token text,
     updated_at timestamp with time zone DEFAULT now(),
-    updated_by text
+    updated_by text,
+    createdat timestamp with time zone DEFAULT now(),
+    updatedat timestamp with time zone DEFAULT now()
 );
 
 
@@ -299,10 +304,10 @@ ALTER TABLE public.github_settings OWNER TO postgres;
 CREATE TABLE public.namhoc (
     id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
     tennamhoc text NOT NULL,
-    tenhocky text NOT NULL,
-    isdefault boolean DEFAULT false,
     islocked boolean DEFAULT false,
-    updatedat timestamp with time zone DEFAULT now()
+    updatedat timestamp with time zone DEFAULT now(),
+    createdat timestamp with time zone DEFAULT now(),
+    isdefault boolean DEFAULT false
 );
 
 
@@ -316,10 +321,11 @@ CREATE TABLE public.phancong (
     id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
     hocky text NOT NULL,
     tuan text NOT NULL,
-    lopcham text NOT NULL,
-    chamlop text NOT NULL,
+    lopcham uuid NOT NULL,
+    chamlop uuid NOT NULL,
     updatedat timestamp with time zone DEFAULT now(),
-    namhoc text
+    namhoc uuid,
+    createdat timestamp with time zone DEFAULT now()
 );
 
 
@@ -339,8 +345,10 @@ CREATE TABLE public.phanquyen (
     quyen_xoa boolean DEFAULT false,
     quyen_chi_doan_phu_trach boolean DEFAULT false,
     ngay_cap_nhat timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
-    nam_hoc text,
-    quyen_xem_tat_ca_chi_doan boolean DEFAULT false
+    nam_hoc uuid,
+    quyen_xem_tat_ca_chi_doan boolean DEFAULT false,
+    createdat timestamp with time zone DEFAULT now(),
+    updatedat timestamp with time zone DEFAULT now()
 );
 
 
@@ -401,7 +409,7 @@ CREATE TABLE public.ptdoanvien (
     pheduyet boolean DEFAULT false,
     createdat timestamp with time zone DEFAULT now(),
     updatedat timestamp with time zone DEFAULT now(),
-    namhoc text,
+    namhoc uuid,
     soquyetdinh text,
     ngayquyetdinh date
 );
@@ -418,14 +426,12 @@ CREATE TABLE public.qlchidoan (
     tenchidoan text NOT NULL,
     buoihoc text NOT NULL,
     ban text,
-    doanvien integer DEFAULT 0,
-    thanhnien integer DEFAULT 0,
-    tongso integer DEFAULT 0,
     phonghoc text,
     bithu text,
     gvcn text,
-    namhoc text NOT NULL,
-    updatedat timestamp with time zone DEFAULT now()
+    namhoc uuid NOT NULL,
+    updatedat timestamp with time zone DEFAULT now(),
+    createdat timestamp with time zone DEFAULT now()
 );
 
 
@@ -463,7 +469,9 @@ CREATE TABLE public.settings (
     word_header_right text,
     word_footer_left text,
     word_footer_right text,
-    namhoc text
+    namhoc uuid,
+    createdat timestamp with time zone DEFAULT now(),
+    updatedat timestamp with time zone DEFAULT now()
 );
 
 
@@ -519,7 +527,8 @@ CREATE TABLE public.tieuchitd (
     ghichu text,
     updatedat timestamp with time zone DEFAULT now(),
     hocky text,
-    namhoc text
+    namhoc uuid,
+    createdat timestamp with time zone DEFAULT now()
 );
 
 
@@ -531,15 +540,16 @@ ALTER TABLE public.tieuchitd OWNER TO postgres;
 
 CREATE TABLE public.tuanhoc (
     id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
-    namhoc text NOT NULL,
+    namhoc uuid NOT NULL,
     hocky text NOT NULL,
     tuan text NOT NULL,
     tungay text,
     denngay text,
     isdefault boolean DEFAULT false,
     islocked boolean DEFAULT false,
-    updatedat timestamp with time zone DEFAULT now(),
-    ghichu text
+    createdat timestamp with time zone DEFAULT now(),
+    ghichu text,
+    updatedat timestamp with time zone DEFAULT now()
 );
 
 
@@ -698,11 +708,11 @@ ALTER TABLE ONLY public.tuanhoc
 
 
 --
--- Name: namhoc unique_namhoc_hocky; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: chamdiem unique_chamdiem_record; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
-ALTER TABLE ONLY public.namhoc
-    ADD CONSTRAINT unique_namhoc_hocky UNIQUE (tennamhoc, tenhocky);
+ALTER TABLE ONLY public.chamdiem
+    ADD CONSTRAINT unique_chamdiem_record UNIQUE (namhoc, hocky, tuan, thu, ngay, lopcham, chamlop, doanvienid, matieuchi, tentieuchi, loaitieuchi, diemtru, diemcong, chidoan_id);
 
 
 --
@@ -728,6 +738,41 @@ CREATE INDEX idx_activity_logs_user_id ON public.activity_logs USING btree (user
 
 
 --
+-- Name: idx_chamdiem_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_chidoan_id ON public.chamdiem USING btree (chidoan_id);
+
+
+--
+-- Name: idx_chamdiem_doanvienid; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_doanvienid ON public.chamdiem USING btree (doanvienid);
+
+
+--
+-- Name: idx_chamdiem_loaitieuchi; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_loaitieuchi ON public.chamdiem USING btree (loaitieuchi);
+
+
+--
+-- Name: idx_chamdiem_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_namhoc ON public.chamdiem USING btree (namhoc);
+
+
+--
+-- Name: idx_chamdiem_thoigian_context; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_thoigian_context ON public.chamdiem USING btree (namhoc, hocky, tuan);
+
+
+--
 -- Name: idx_doanvien_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -735,10 +780,157 @@ CREATE INDEX idx_doanvien_chidoan_id ON public.doanvien USING btree (chidoan_id)
 
 
 --
+-- Name: idx_doanvien_chidoan_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_doanvien_chidoan_namhoc ON public.doanvien USING btree (chidoan_id, namhoc);
+
+
+--
+-- Name: idx_doanvien_hoten; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_doanvien_hoten ON public.doanvien USING btree (hoten);
+
+
+--
+-- Name: idx_doanvien_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_doanvien_namhoc ON public.doanvien USING btree (namhoc);
+
+
+--
 -- Name: idx_dotptdoanvien_nam_hk; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_dotptdoanvien_nam_hk ON public.dotptdoanvien USING btree (namhoc, hocky);
+
+
+--
+-- Name: idx_dotptdoanvien_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_dotptdoanvien_namhoc ON public.dotptdoanvien USING btree (namhoc);
+
+
+--
+-- Name: idx_namhoc_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE UNIQUE INDEX idx_namhoc_isdefault_true ON public.namhoc USING btree (isdefault) WHERE (isdefault = true);
+
+
+--
+-- Name: idx_phancong_chamlop; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_phancong_chamlop ON public.phancong USING btree (chamlop);
+
+
+--
+-- Name: idx_phancong_context; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_phancong_context ON public.phancong USING btree (namhoc, hocky, tuan);
+
+
+--
+-- Name: idx_phancong_lopcham; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_phancong_lopcham ON public.phancong USING btree (lopcham);
+
+
+--
+-- Name: idx_phancong_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_phancong_namhoc ON public.phancong USING btree (namhoc);
+
+
+--
+-- Name: idx_phanquyen_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_phanquyen_namhoc ON public.phanquyen USING btree (nam_hoc);
+
+
+--
+-- Name: idx_ptdoanvien_doanvien; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_ptdoanvien_doanvien ON public.ptdoanvien USING btree (doanvien_id);
+
+
+--
+-- Name: idx_ptdoanvien_dot; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_ptdoanvien_dot ON public.ptdoanvien USING btree (dotdangki);
+
+
+--
+-- Name: idx_ptdoanvien_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_ptdoanvien_namhoc ON public.ptdoanvien USING btree (namhoc);
+
+
+--
+-- Name: idx_qlchidoan_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_qlchidoan_namhoc ON public.qlchidoan USING btree (namhoc);
+
+
+--
+-- Name: idx_settings_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_settings_namhoc ON public.settings USING btree (namhoc);
+
+
+--
+-- Name: idx_taikhoan_chidoan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_taikhoan_chidoan ON public.taikhoan USING btree (chidoan_id);
+
+
+--
+-- Name: idx_tieuchitd_context; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_tieuchitd_context ON public.tieuchitd USING btree (namhoc, hocky);
+
+
+--
+-- Name: idx_tieuchitd_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_tieuchitd_namhoc ON public.tieuchitd USING btree (namhoc);
+
+
+--
+-- Name: idx_tuan_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE UNIQUE INDEX idx_tuan_isdefault_true ON public.tuanhoc USING btree (isdefault) WHERE (isdefault = true);
+
+
+--
+-- Name: idx_tuanhoc_context; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_tuanhoc_context ON public.tuanhoc USING btree (namhoc, hocky, tuan);
+
+
+--
+-- Name: idx_tuanhoc_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_tuanhoc_namhoc ON public.tuanhoc USING btree (namhoc);
 
 
 --
@@ -756,17 +948,108 @@ CREATE INDEX ngay_3_5_idx_ptdoanvien_dotdangki ON public.ptdoanvien USING btree 
 
 
 --
--- Name: qlchidoan trigger_cascade_delete_chidoan; Type: TRIGGER; Schema: public; Owner: postgres
---
-
-CREATE TRIGGER trigger_cascade_delete_chidoan BEFORE DELETE ON public.qlchidoan FOR EACH ROW EXECUTE FUNCTION public.delete_cascade_chidoan_logic();
-
-
---
 -- Name: qlchidoan trigger_chi_doan_deletion; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER trigger_chi_doan_deletion AFTER DELETE ON public.qlchidoan FOR EACH ROW EXECUTE FUNCTION public.handle_chi_doan_deletion();
+
+
+--
+-- Name: chamdiem update_chamdiem_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_chamdiem_modtime BEFORE UPDATE ON public.chamdiem FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: doanvien update_doanvien_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_doanvien_modtime BEFORE UPDATE ON public.doanvien FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: dotptdoanvien update_dotptdoanvien_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_dotptdoanvien_modtime BEFORE UPDATE ON public.dotptdoanvien FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: duytricsdl update_duytricsdl_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_duytricsdl_modtime BEFORE UPDATE ON public.duytricsdl FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: github_settings update_github_settings_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_github_settings_modtime BEFORE UPDATE ON public.github_settings FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: namhoc update_namhoc_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_namhoc_modtime BEFORE UPDATE ON public.namhoc FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: phancong update_phancong_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_phancong_modtime BEFORE UPDATE ON public.phancong FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: phanquyen update_phanquyen_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_phanquyen_modtime BEFORE UPDATE ON public.phanquyen FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: ptdoanvien update_ptdoanvien_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_ptdoanvien_modtime BEFORE UPDATE ON public.ptdoanvien FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: qlchidoan update_qlchidoan_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_qlchidoan_modtime BEFORE UPDATE ON public.qlchidoan FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: settings update_settings_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_settings_modtime BEFORE UPDATE ON public.settings FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: taikhoan update_taikhoan_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_taikhoan_modtime BEFORE UPDATE ON public.taikhoan FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: tieuchitd update_tieuchitd_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_tieuchitd_modtime BEFORE UPDATE ON public.tieuchitd FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+
+
+--
+-- Name: tuanhoc update_tuanhoc_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER update_tuanhoc_modtime BEFORE UPDATE ON public.tuanhoc FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
@@ -786,11 +1069,155 @@ ALTER TABLE ONLY public.ptdoanvien
 
 
 --
--- Name: doanvien fk_doanvien_chidoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: activity_logs activity_logs_namhoc_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.activity_logs
+    ADD CONSTRAINT activity_logs_namhoc_fkey FOREIGN KEY (namhoc) REFERENCES public.namhoc(id);
+
+
+--
+-- Name: chamdiem chamdiem_chamlop_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.chamdiem
+    ADD CONSTRAINT chamdiem_chamlop_fkey FOREIGN KEY (chamlop) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: chamdiem chamdiem_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.chamdiem
+    ADD CONSTRAINT chamdiem_chidoan_id_fkey FOREIGN KEY (chidoan_id) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: chamdiem chamdiem_doanvienid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.chamdiem
+    ADD CONSTRAINT chamdiem_doanvienid_fkey FOREIGN KEY (doanvienid) REFERENCES public.doanvien(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: chamdiem chamdiem_lopcham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.chamdiem
+    ADD CONSTRAINT chamdiem_lopcham_fkey FOREIGN KEY (lopcham) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: doanvien doanvien_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.doanvien
-    ADD CONSTRAINT fk_doanvien_chidoan FOREIGN KEY (chidoan_id) REFERENCES public.qlchidoan(id) ON DELETE CASCADE;
+    ADD CONSTRAINT doanvien_chidoan_id_fkey FOREIGN KEY (chidoan_id) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: chamdiem fk_chamdiem_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.chamdiem
+    ADD CONSTRAINT fk_chamdiem_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: doanvien fk_doanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.doanvien
+    ADD CONSTRAINT fk_doanvien_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: dotptdoanvien fk_dotptdoanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.dotptdoanvien
+    ADD CONSTRAINT fk_dotptdoanvien_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: phancong fk_phancong_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.phancong
+    ADD CONSTRAINT fk_phancong_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: phanquyen fk_phanquyen_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.phanquyen
+    ADD CONSTRAINT fk_phanquyen_namhoc FOREIGN KEY (nam_hoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: ptdoanvien fk_ptdoanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ptdoanvien
+    ADD CONSTRAINT fk_ptdoanvien_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: qlchidoan fk_qlchidoan_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.qlchidoan
+    ADD CONSTRAINT fk_qlchidoan_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: settings fk_settings_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.settings
+    ADD CONSTRAINT fk_settings_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: tieuchitd fk_tieuchitd_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.tieuchitd
+    ADD CONSTRAINT fk_tieuchitd_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: tuanhoc fk_tuanhoc_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.tuanhoc
+    ADD CONSTRAINT fk_tuanhoc_namhoc FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: phancong phancong_chamlop_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.phancong
+    ADD CONSTRAINT phancong_chamlop_fkey FOREIGN KEY (chamlop) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: phancong phancong_lopcham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.phancong
+    ADD CONSTRAINT phancong_lopcham_fkey FOREIGN KEY (lopcham) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: taikhoan taikhoan_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.taikhoan
+    ADD CONSTRAINT taikhoan_chidoan_id_fkey FOREIGN KEY (chidoan_id) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
 
 
 --
@@ -828,13 +1255,6 @@ CREATE POLICY "Authenticated users only" ON public.doanvien TO authenticated USI
 --
 
 CREATE POLICY "Authenticated users only" ON public.dotptdoanvien TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: duytricsdl Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Authenticated users only" ON public.duytricsdl TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
 
 
 --
@@ -919,31 +1339,10 @@ CREATE POLICY "Cho phép người dùng đã đăng nhập thao tác github_se" 
 
 
 --
--- Name: chamdiem Enable read access for all users; Type: POLICY; Schema: public; Owner: postgres
+-- Name: taikhoan Enable read access for all users; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Enable read access for all users" ON public.chamdiem FOR SELECT USING (true);
-
-
---
--- Name: phancong Enable read access for all users; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Enable read access for all users" ON public.phancong FOR SELECT USING (true);
-
-
---
--- Name: settings Enable read access for all users; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Enable read access for all users" ON public.settings FOR SELECT USING (true);
-
-
---
--- Name: tuanhoc Enable read access for all users; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Enable read access for all users" ON public.tuanhoc FOR SELECT USING (true);
+CREATE POLICY "Enable read access for all users" ON public.taikhoan FOR SELECT USING (true);
 
 
 --
@@ -1037,12 +1436,6 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 
 --
--- Name: FUNCTION delete_cascade_chidoan_logic(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
 -- Name: FUNCTION handle_chi_doan_deletion(); Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -1074,6 +1467,12 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: FUNCTION update_likes_count(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION update_modified_column(); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -1208,7 +1607,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict pUwXR2wJuSVOw6v1ou8eVpsXAZ8Vv6i3CnaxQjKsrIV9gxY9RKzZExCXqkf4UKM
+\unrestrict ODbJ7RUaehHz7xay9KrqjfT0q4hLrbvTqSld1DhZGkjZpbATBmYLvKgoR7strpc
 
 
 -- 1. Khởi tạo tài khoản quản trị
