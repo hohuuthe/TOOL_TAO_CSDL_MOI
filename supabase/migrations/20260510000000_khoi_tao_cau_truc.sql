@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict ODbJ7RUaehHz7xay9KrqjfT0q4hLrbvTqSld1DhZGkjZpbATBmYLvKgoR7strpc
+\restrict Encu6F2I7rR33hyzbAz6zqrCrua1NGlmVgvrZShRpcOFbGSscQAahyrrvMPQ6GQ
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
@@ -108,7 +108,9 @@ CREATE TABLE public.taikhoan (
     role text NOT NULL,
     updatedat timestamp with time zone DEFAULT now(),
     chidoan_id uuid,
-    createdat timestamp with time zone DEFAULT now()
+    createdat timestamp with time zone DEFAULT now(),
+    doanvien_id uuid,
+    sl_dangnhap integer DEFAULT 0
 );
 
 
@@ -339,16 +341,28 @@ CREATE TABLE public.phanquyen (
     id bigint NOT NULL,
     doi_tuong character varying(50) NOT NULL,
     tab_chuc_nang character varying(100) NOT NULL,
+    ngay_cap_nhat timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+    nam_hoc uuid,
+    createdat timestamp with time zone DEFAULT now(),
+    updatedat timestamp with time zone DEFAULT now(),
+    xem_canhan boolean DEFAULT false,
+    them_canhan boolean DEFAULT false,
+    sua_canhan boolean DEFAULT false,
+    xoa_canhan boolean DEFAULT false,
+    xem_chidoan boolean DEFAULT false,
+    them_chidoan boolean DEFAULT false,
+    sua_chidoan boolean DEFAULT false,
+    xoa_chidoan boolean DEFAULT false,
+    xem_tatcadl boolean DEFAULT false,
+    them_tatcadl boolean DEFAULT false,
+    sua_tatcadl boolean DEFAULT false,
+    xoa_tatcadl boolean DEFAULT false,
     quyen_xem boolean DEFAULT false,
     quyen_them boolean DEFAULT false,
     quyen_sua boolean DEFAULT false,
     quyen_xoa boolean DEFAULT false,
     quyen_chi_doan_phu_trach boolean DEFAULT false,
-    ngay_cap_nhat timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
-    nam_hoc uuid,
-    quyen_xem_tat_ca_chi_doan boolean DEFAULT false,
-    createdat timestamp with time zone DEFAULT now(),
-    updatedat timestamp with time zone DEFAULT now()
+    quyen_xem_tat_ca_chi_doan boolean DEFAULT false
 );
 
 
@@ -373,13 +387,6 @@ COMMENT ON COLUMN public.phanquyen.doi_tuong IS 'Vai trò của người dùng (
 --
 
 COMMENT ON COLUMN public.phanquyen.tab_chuc_nang IS 'Mã tab chức năng trên giao diện';
-
-
---
--- Name: COLUMN phanquyen.quyen_chi_doan_phu_trach; Type: COMMENT; Schema: public; Owner: postgres
---
-
-COMMENT ON COLUMN public.phanquyen.quyen_chi_doan_phu_trach IS 'Giới hạn phạm vi dữ liệu chỉ trong chi đoàn của user';
 
 
 --
@@ -416,6 +423,81 @@ CREATE TABLE public.ptdoanvien (
 
 
 ALTER TABLE public.ptdoanvien OWNER TO postgres;
+
+--
+-- Name: push_subscriptions; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.push_subscriptions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    role text,
+    chidoan_id uuid,
+    subscription jsonb NOT NULL,
+    endpoint text NOT NULL,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.push_subscriptions OWNER TO postgres;
+
+--
+-- Name: ql_baocao; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.ql_baocao (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    chu_de text NOT NULL,
+    chu_de_phu text,
+    tu_ngay date,
+    den_ngay date,
+    cho_phep_minh_chung boolean DEFAULT true,
+    doi_tuong_nop text,
+    huong_dan text,
+    ngay_tao timestamp with time zone DEFAULT now(),
+    nam_hoc_id uuid,
+    hoc_ky text
+);
+
+
+ALTER TABLE public.ql_baocao OWNER TO postgres;
+
+--
+-- Name: ql_nop_bc; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.ql_nop_bc (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    ql_bao_cao_id uuid NOT NULL,
+    doanvien_id uuid,
+    noi_dung1 text,
+    noi_dung2 text,
+    noi_dung3 text,
+    noi_dung4 text,
+    noi_dung5 text,
+    noi_dung6 text,
+    noi_dung7 text,
+    noi_dung8 text,
+    noi_dung9 text,
+    noi_dung10 text,
+    duong_dan_minh_chung text,
+    ghi_chu text,
+    trang_thai text,
+    ngay_capnhat timestamp with time zone DEFAULT now(),
+    chi_doan_id uuid,
+    danh_sach_anh text,
+    vaitro_nop text
+);
+
+
+ALTER TABLE public.ql_nop_bc OWNER TO postgres;
+
+--
+-- Name: COLUMN ql_nop_bc.danh_sach_anh; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_nop_bc.danh_sach_anh IS 'Danh sách liên kết các ảnh minh chứng tải lên R2, phân tách bằng dấu phẩy';
+
 
 --
 -- Name: qlchidoan; Type: TABLE; Schema: public; Owner: postgres
@@ -471,7 +553,16 @@ CREATE TABLE public.settings (
     word_footer_right text,
     namhoc uuid,
     createdat timestamp with time zone DEFAULT now(),
-    updatedat timestamp with time zone DEFAULT now()
+    updatedat timestamp with time zone DEFAULT now(),
+    cloudinary_cloud_name text,
+    cloudinary_upload_preset text,
+    cloudinary_api_key text,
+    cloudinary_api_secret text,
+    r2_account_id text,
+    r2_access_key_id text,
+    r2_secret_access_key text,
+    r2_bucket_name text,
+    r2_custom_domain text
 );
 
 
@@ -511,6 +602,51 @@ COMMENT ON COLUMN public.settings.autopenaltyenabled IS 'Trạng thái bật/t�
 
 COMMENT ON COLUMN public.settings.autopenaltyreporter IS 'Tên người chấm hiển thị trong bảng điểm';
 
+
+--
+-- Name: theodoi360; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.theodoi360 (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    nguoi_to_cao_id uuid NOT NULL,
+    doan_vien_vi_pham_id uuid NOT NULL,
+    tieu_chi_id uuid NOT NULL,
+    chi_tiet_vi_pham text,
+    danh_sach_hinh_anh jsonb DEFAULT '[]'::jsonb,
+    url_video text,
+    trang_thai text DEFAULT 'cho_duyet'::text,
+    nam_hoc_id uuid NOT NULL,
+    tuan_id uuid NOT NULL,
+    ngay_vi_pham date,
+    ngay_tao timestamp with time zone DEFAULT now(),
+    hoc_ky text,
+    phan_hoi_bi_to_cao text,
+    phan_hoi_lop text,
+    minh_chung_drive text
+);
+
+
+ALTER TABLE public.theodoi360 OWNER TO postgres;
+
+--
+-- Name: thongbao_hethong; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.thongbao_hethong (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    title text NOT NULL,
+    content text NOT NULL,
+    sender text DEFAULT 'Hệ thống'::text,
+    target_role text DEFAULT 'all'::text,
+    target_chidoan_id uuid,
+    target_user_id uuid,
+    created_at timestamp with time zone DEFAULT now(),
+    read_by jsonb DEFAULT '[]'::jsonb
+);
+
+
+ALTER TABLE public.thongbao_hethong OWNER TO postgres;
 
 --
 -- Name: tieuchitd; Type: TABLE; Schema: public; Owner: postgres
@@ -644,6 +780,38 @@ ALTER TABLE ONLY public.ptdoanvien
 
 
 --
+-- Name: push_subscriptions push_subscriptions_endpoint_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.push_subscriptions
+    ADD CONSTRAINT push_subscriptions_endpoint_key UNIQUE (endpoint);
+
+
+--
+-- Name: push_subscriptions push_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.push_subscriptions
+    ADD CONSTRAINT push_subscriptions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ql_baocao ql_baocao_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ql_baocao
+    ADD CONSTRAINT ql_baocao_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ql_nop_bc ql_nop_bc_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ql_nop_bc
+    ADD CONSTRAINT ql_nop_bc_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: qlchidoan qlchidoan_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -681,6 +849,22 @@ ALTER TABLE ONLY public.taikhoan
 
 ALTER TABLE ONLY public.taikhoan
     ADD CONSTRAINT taikhoan_username_key UNIQUE (username);
+
+
+--
+-- Name: theodoi360 theodoi360_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.theodoi360
+    ADD CONSTRAINT theodoi360_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: thongbao_hethong thongbao_hethong_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.thongbao_hethong
+    ADD CONSTRAINT thongbao_hethong_pkey PRIMARY KEY (id);
 
 
 --
@@ -759,10 +943,24 @@ CREATE INDEX idx_chamdiem_loaitieuchi ON public.chamdiem USING btree (loaitieuch
 
 
 --
+-- Name: idx_chamdiem_lopcham_chamlop; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_lopcham_chamlop ON public.chamdiem USING btree (lopcham, chamlop);
+
+
+--
 -- Name: idx_chamdiem_namhoc; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_chamdiem_namhoc ON public.chamdiem USING btree (namhoc);
+
+
+--
+-- Name: idx_chamdiem_namhoc_hocky_tuan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_namhoc_hocky_tuan ON public.chamdiem USING btree (namhoc, hocky, tuan);
 
 
 --
@@ -850,6 +1048,13 @@ CREATE INDEX idx_phancong_namhoc ON public.phancong USING btree (namhoc);
 
 
 --
+-- Name: idx_phancong_namhoc_hocky_tuan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_phancong_namhoc_hocky_tuan ON public.phancong USING btree (namhoc, hocky, tuan);
+
+
+--
 -- Name: idx_phanquyen_namhoc; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -864,6 +1069,13 @@ CREATE INDEX idx_ptdoanvien_doanvien ON public.ptdoanvien USING btree (doanvien_
 
 
 --
+-- Name: idx_ptdoanvien_doanvien_id; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_ptdoanvien_doanvien_id ON public.ptdoanvien USING btree (doanvien_id);
+
+
+--
 -- Name: idx_ptdoanvien_dot; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -871,10 +1083,38 @@ CREATE INDEX idx_ptdoanvien_dot ON public.ptdoanvien USING btree (dotdangki);
 
 
 --
+-- Name: idx_ptdoanvien_dotdangki; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_ptdoanvien_dotdangki ON public.ptdoanvien USING btree (dotdangki);
+
+
+--
 -- Name: idx_ptdoanvien_namhoc; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ptdoanvien_namhoc ON public.ptdoanvien USING btree (namhoc);
+
+
+--
+-- Name: idx_ql_nop_bc_baocao; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_ql_nop_bc_baocao ON public.ql_nop_bc USING btree (ql_bao_cao_id);
+
+
+--
+-- Name: idx_ql_nop_bc_chidoan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_ql_nop_bc_chidoan ON public.ql_nop_bc USING btree (chi_doan_id);
+
+
+--
+-- Name: idx_ql_nop_bc_doanvien; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_ql_nop_bc_doanvien ON public.ql_nop_bc USING btree (doanvien_id);
 
 
 --
@@ -896,6 +1136,34 @@ CREATE INDEX idx_settings_namhoc ON public.settings USING btree (namhoc);
 --
 
 CREATE INDEX idx_taikhoan_chidoan ON public.taikhoan USING btree (chidoan_id);
+
+
+--
+-- Name: idx_taikhoan_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_taikhoan_chidoan_id ON public.taikhoan USING btree (chidoan_id);
+
+
+--
+-- Name: idx_taikhoan_doanvien_id; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_taikhoan_doanvien_id ON public.taikhoan USING btree (doanvien_id);
+
+
+--
+-- Name: idx_theodoi360_doanvien; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_theodoi360_doanvien ON public.theodoi360 USING btree (doan_vien_vi_pham_id);
+
+
+--
+-- Name: idx_theodoi360_namhoc_tuan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_theodoi360_namhoc_tuan ON public.theodoi360 USING btree (nam_hoc_id, tuan_id);
 
 
 --
@@ -1165,6 +1433,38 @@ ALTER TABLE ONLY public.ptdoanvien
 
 
 --
+-- Name: ql_baocao fk_ql_baocao_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ql_baocao
+    ADD CONSTRAINT fk_ql_baocao_namhoc FOREIGN KEY (nam_hoc_id) REFERENCES public.namhoc(id);
+
+
+--
+-- Name: ql_nop_bc fk_ql_nop_bc_baocao; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ql_nop_bc
+    ADD CONSTRAINT fk_ql_nop_bc_baocao FOREIGN KEY (ql_bao_cao_id) REFERENCES public.ql_baocao(id) ON DELETE CASCADE;
+
+
+--
+-- Name: ql_nop_bc fk_ql_nop_bc_chidoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ql_nop_bc
+    ADD CONSTRAINT fk_ql_nop_bc_chidoan FOREIGN KEY (chi_doan_id) REFERENCES public.qlchidoan(id) ON DELETE SET NULL;
+
+
+--
+-- Name: ql_nop_bc fk_ql_nop_bc_doanvien; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ql_nop_bc
+    ADD CONSTRAINT fk_ql_nop_bc_doanvien FOREIGN KEY (doanvien_id) REFERENCES public.doanvien(id) ON DELETE CASCADE;
+
+
+--
 -- Name: qlchidoan fk_qlchidoan_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -1221,12 +1521,102 @@ ALTER TABLE ONLY public.taikhoan
 
 
 --
+-- Name: taikhoan taikhoan_doanvien_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.taikhoan
+    ADD CONSTRAINT taikhoan_doanvien_id_fkey FOREIGN KEY (doanvien_id) REFERENCES public.doanvien(id) ON DELETE SET NULL;
+
+
+--
+-- Name: theodoi360 theodoi360_doan_vien_vi_pham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.theodoi360
+    ADD CONSTRAINT theodoi360_doan_vien_vi_pham_fkey FOREIGN KEY (doan_vien_vi_pham_id) REFERENCES public.doanvien(id);
+
+
+--
+-- Name: theodoi360 theodoi360_nam_hoc_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.theodoi360
+    ADD CONSTRAINT theodoi360_nam_hoc_fkey FOREIGN KEY (nam_hoc_id) REFERENCES public.namhoc(id);
+
+
+--
+-- Name: theodoi360 theodoi360_nguoi_to_cao_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.theodoi360
+    ADD CONSTRAINT theodoi360_nguoi_to_cao_fkey FOREIGN KEY (nguoi_to_cao_id) REFERENCES public.doanvien(id);
+
+
+--
+-- Name: theodoi360 theodoi360_tieu_chi_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.theodoi360
+    ADD CONSTRAINT theodoi360_tieu_chi_fkey FOREIGN KEY (tieu_chi_id) REFERENCES public.tieuchitd(id);
+
+
+--
+-- Name: theodoi360 theodoi360_tuan_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.theodoi360
+    ADD CONSTRAINT theodoi360_tuan_fkey FOREIGN KEY (tuan_id) REFERENCES public.tuanhoc(id);
+
+
+--
 -- Name: activity_logs Admins can view all activity logs; Type: POLICY; Schema: public; Owner: postgres
 --
 
 CREATE POLICY "Admins can view all activity logs" ON public.activity_logs FOR SELECT TO authenticated USING ((EXISTS ( SELECT 1
    FROM public.taikhoan
   WHERE ((taikhoan.id = auth.uid()) AND (taikhoan.role = 'Admin'::text)))));
+
+
+--
+-- Name: theodoi360 Allow authenticated users to DELETE; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Allow authenticated users to DELETE" ON public.theodoi360 FOR DELETE TO authenticated USING (true);
+
+
+--
+-- Name: theodoi360 Allow authenticated users to INSERT; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Allow authenticated users to INSERT" ON public.theodoi360 FOR INSERT TO authenticated WITH CHECK (true);
+
+
+--
+-- Name: theodoi360 Allow authenticated users to SELECT; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Allow authenticated users to SELECT" ON public.theodoi360 FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: theodoi360 Allow authenticated users to UPDATE; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Allow authenticated users to UPDATE" ON public.theodoi360 FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: ql_baocao Allow full access for authenticated users; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Allow full access for authenticated users" ON public.ql_baocao TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: ql_nop_bc Allow full access for authenticated users on ql_nop_bc; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Allow full access for authenticated users on ql_nop_bc" ON public.ql_nop_bc TO authenticated USING (true) WITH CHECK (true);
 
 
 --
@@ -1332,10 +1722,24 @@ CREATE POLICY "Cho phép Admin quản lý cấu hình github" ON public.github_s
 
 
 --
+-- Name: namhoc Cho phép người dùng xác thực có toàn quyền bảng n; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép người dùng xác thực có toàn quyền bảng n" ON public.namhoc TO authenticated USING (true) WITH CHECK (true);
+
+
+--
 -- Name: github_settings Cho phép người dùng đã đăng nhập thao tác github_se; Type: POLICY; Schema: public; Owner: postgres
 --
 
 CREATE POLICY "Cho phép người dùng đã đăng nhập thao tác github_se" ON public.github_settings TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: namhoc Cho phép đọc công khai bảng namhoc; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép đọc công khai bảng namhoc" ON public.namhoc FOR SELECT USING (true);
 
 
 --
@@ -1400,6 +1804,18 @@ ALTER TABLE public.phanquyen ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ptdoanvien ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: ql_baocao; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.ql_baocao ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: ql_nop_bc; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.ql_nop_bc ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: qlchidoan; Type: ROW SECURITY; Schema: public; Owner: postgres
 --
 
@@ -1416,6 +1832,12 @@ ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.taikhoan ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: theodoi360; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.theodoi360 ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: tieuchitd; Type: ROW SECURITY; Schema: public; Owner: postgres
@@ -1544,6 +1966,24 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 
 --
+-- Name: TABLE push_subscriptions; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: TABLE ql_baocao; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: TABLE ql_nop_bc; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: TABLE qlchidoan; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -1551,6 +1991,18 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: TABLE settings; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: TABLE theodoi360; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: TABLE thongbao_hethong; Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -1607,7 +2059,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict ODbJ7RUaehHz7xay9KrqjfT0q4hLrbvTqSld1DhZGkjZpbATBmYLvKgoR7strpc
+\unrestrict Encu6F2I7rR33hyzbAz6zqrCrua1NGlmVgvrZShRpcOFbGSscQAahyrrvMPQ6GQ
 
 
 -- 1. Khởi tạo tài khoản quản trị
