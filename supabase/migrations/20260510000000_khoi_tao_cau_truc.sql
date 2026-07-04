@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict mcjv14McpcrO1crb0WEtGN1MhERk3g1ph8HPGGtb49uLDVZfkNoxkRgcO2Vtl0f
+\restrict VYeGT5Lf3ZB3lc2xfRdn7xxdHa19sHvks4QFq6IIiaB1RDpc9r7OtmgYJhEQkVL
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
@@ -110,7 +110,8 @@ CREATE TABLE public.taikhoan (
     chidoan_id uuid,
     createdat timestamp with time zone DEFAULT now(),
     doanvien_id uuid,
-    sl_dangnhap integer DEFAULT 0
+    sl_dangnhap integer DEFAULT 0,
+    tg_truycap timestamp with time zone
 );
 
 
@@ -362,7 +363,8 @@ CREATE TABLE public.phanquyen (
     quyen_sua boolean DEFAULT false,
     quyen_xoa boolean DEFAULT false,
     quyen_chi_doan_phu_trach boolean DEFAULT false,
-    quyen_xem_tat_ca_chi_doan boolean DEFAULT false
+    quyen_xem_tat_ca_chi_doan boolean DEFAULT false,
+    giai_thich text DEFAULT ''::text
 );
 
 
@@ -486,7 +488,9 @@ CREATE TABLE public.ql_nop_bc (
     ngay_capnhat timestamp with time zone DEFAULT now(),
     chi_doan_id uuid,
     danh_sach_anh text,
-    vaitro_nop text
+    vaitro_nop text,
+    doituong_nop text,
+    nguoi_tao_id text
 );
 
 
@@ -922,6 +926,13 @@ CREATE INDEX idx_activity_logs_user_id ON public.activity_logs USING btree (user
 
 
 --
+-- Name: idx_chamdiem_chamlop; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_chamlop ON public.chamdiem USING btree (chamlop);
+
+
+--
 -- Name: idx_chamdiem_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -933,6 +944,13 @@ CREATE INDEX idx_chamdiem_chidoan_id ON public.chamdiem USING btree (chidoan_id)
 --
 
 CREATE INDEX idx_chamdiem_doanvienid ON public.chamdiem USING btree (doanvienid);
+
+
+--
+-- Name: idx_chamdiem_hocky; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_hocky ON public.chamdiem USING btree (hocky);
 
 
 --
@@ -961,6 +979,13 @@ CREATE INDEX idx_chamdiem_namhoc ON public.chamdiem USING btree (namhoc);
 --
 
 CREATE INDEX idx_chamdiem_namhoc_hocky_tuan ON public.chamdiem USING btree (namhoc, hocky, tuan);
+
+
+--
+-- Name: idx_chamdiem_namhoc_tuan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_namhoc_tuan ON public.chamdiem USING btree (namhoc, tuan);
 
 
 --
@@ -1132,24 +1157,24 @@ CREATE INDEX idx_settings_namhoc ON public.settings USING btree (namhoc);
 
 
 --
--- Name: idx_taikhoan_chidoan; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_taikhoan_chidoan ON public.taikhoan USING btree (chidoan_id);
-
-
---
--- Name: idx_taikhoan_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_taikhoan_chidoan_id ON public.taikhoan USING btree (chidoan_id);
-
-
---
 -- Name: idx_taikhoan_doanvien_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_taikhoan_doanvien_id ON public.taikhoan USING btree (doanvien_id);
+
+
+--
+-- Name: idx_taikhoan_role; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_taikhoan_role ON public.taikhoan USING btree (role);
+
+
+--
+-- Name: idx_taikhoan_username_lower; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_taikhoan_username_lower ON public.taikhoan USING btree (lower(username));
 
 
 --
@@ -1722,6 +1747,69 @@ CREATE POLICY "Cho phép Admin quản lý cấu hình github" ON public.github_s
 
 
 --
+-- Name: push_subscriptions Cho phép DELETE push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép DELETE push_subscriptions khi đã đăng nhập" ON public.push_subscriptions FOR DELETE USING ((auth.role() = 'authenticated'::text));
+
+
+--
+-- Name: thongbao_hethong Cho phép DELETE thongbao_hethong khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép DELETE thongbao_hethong khi đã đăng nhập" ON public.thongbao_hethong FOR DELETE USING ((auth.role() = 'authenticated'::text));
+
+
+--
+-- Name: push_subscriptions Cho phép INSERT push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép INSERT push_subscriptions khi đã đăng nhập" ON public.push_subscriptions FOR INSERT WITH CHECK ((auth.role() = 'authenticated'::text));
+
+
+--
+-- Name: thongbao_hethong Cho phép INSERT thongbao_hethong khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép INSERT thongbao_hethong khi đã đăng nhập" ON public.thongbao_hethong FOR INSERT WITH CHECK ((auth.role() = 'authenticated'::text));
+
+
+--
+-- Name: push_subscriptions Cho phép SELECT push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép SELECT push_subscriptions khi đã đăng nhập" ON public.push_subscriptions FOR SELECT USING ((auth.role() = 'authenticated'::text));
+
+
+--
+-- Name: thongbao_hethong Cho phép SELECT thongbao_hethong khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép SELECT thongbao_hethong khi đã đăng nhập" ON public.thongbao_hethong FOR SELECT USING ((auth.role() = 'authenticated'::text));
+
+
+--
+-- Name: push_subscriptions Cho phép UPDATE push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép UPDATE push_subscriptions khi đã đăng nhập" ON public.push_subscriptions FOR UPDATE USING ((auth.role() = 'authenticated'::text));
+
+
+--
+-- Name: thongbao_hethong Cho phép UPDATE thongbao_hethong khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép UPDATE thongbao_hethong khi đã đăng nhập" ON public.thongbao_hethong FOR UPDATE USING ((auth.role() = 'authenticated'::text));
+
+
+--
+-- Name: duytricsdl Cho phép cập nhật dữ liệu công khai; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép cập nhật dữ liệu công khai" ON public.duytricsdl FOR UPDATE USING (true) WITH CHECK (true);
+
+
+--
 -- Name: namhoc Cho phép người dùng xác thực có toàn quyền bảng n; Type: POLICY; Schema: public; Owner: postgres
 --
 
@@ -1740,6 +1828,27 @@ CREATE POLICY "Cho phép người dùng đã đăng nhập thao tác github_se" 
 --
 
 CREATE POLICY "Cho phép đọc công khai bảng namhoc" ON public.namhoc FOR SELECT USING (true);
+
+
+--
+-- Name: duytricsdl Cho phép đọc dữ liệu công khai; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép đọc dữ liệu công khai" ON public.duytricsdl FOR SELECT USING (true);
+
+
+--
+-- Name: duytricsdl Chỉ cho phép thêm khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Chỉ cho phép thêm khi đã đăng nhập" ON public.duytricsdl FOR INSERT TO authenticated WITH CHECK (true);
+
+
+--
+-- Name: duytricsdl Chỉ cho phép xóa khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Chỉ cho phép xóa khi đã đăng nhập" ON public.duytricsdl FOR DELETE TO authenticated USING (true);
 
 
 --
@@ -1774,6 +1883,12 @@ ALTER TABLE public.doanvien ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.dotptdoanvien ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: duytricsdl; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.duytricsdl ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: github_settings; Type: ROW SECURITY; Schema: public; Owner: postgres
 --
 
@@ -1802,6 +1917,12 @@ ALTER TABLE public.phanquyen ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.ptdoanvien ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: push_subscriptions; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: ql_baocao; Type: ROW SECURITY; Schema: public; Owner: postgres
@@ -1838,6 +1959,12 @@ ALTER TABLE public.taikhoan ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.theodoi360 ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: thongbao_hethong; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.thongbao_hethong ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: tieuchitd; Type: ROW SECURITY; Schema: public; Owner: postgres
@@ -2059,7 +2186,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict mcjv14McpcrO1crb0WEtGN1MhERk3g1ph8HPGGtb49uLDVZfkNoxkRgcO2Vtl0f
+\unrestrict VYeGT5Lf3ZB3lc2xfRdn7xxdHa19sHvks4QFq6IIiaB1RDpc9r7OtmgYJhEQkVL
 
 
 -- 1. Khởi tạo tài khoản quản trị
