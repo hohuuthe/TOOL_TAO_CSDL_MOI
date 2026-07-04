@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict VYeGT5Lf3ZB3lc2xfRdn7xxdHa19sHvks4QFq6IIiaB1RDpc9r7OtmgYJhEQkVL
+\restrict OU4gQg0i2aTqUB2EkzOl8hsYgby0M72Ctfpj9TiWV0lzfbKLjbkIkvnKqC7V79P
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
@@ -346,24 +346,10 @@ CREATE TABLE public.phanquyen (
     nam_hoc uuid,
     createdat timestamp with time zone DEFAULT now(),
     updatedat timestamp with time zone DEFAULT now(),
-    xem_canhan boolean DEFAULT false,
-    them_canhan boolean DEFAULT false,
-    sua_canhan boolean DEFAULT false,
-    xoa_canhan boolean DEFAULT false,
-    xem_chidoan boolean DEFAULT false,
-    them_chidoan boolean DEFAULT false,
-    sua_chidoan boolean DEFAULT false,
-    xoa_chidoan boolean DEFAULT false,
-    xem_tatcadl boolean DEFAULT false,
-    them_tatcadl boolean DEFAULT false,
-    sua_tatcadl boolean DEFAULT false,
-    xoa_tatcadl boolean DEFAULT false,
     quyen_xem boolean DEFAULT false,
     quyen_them boolean DEFAULT false,
     quyen_sua boolean DEFAULT false,
     quyen_xoa boolean DEFAULT false,
-    quyen_chi_doan_phu_trach boolean DEFAULT false,
-    quyen_xem_tat_ca_chi_doan boolean DEFAULT false,
     giai_thich text DEFAULT ''::text
 );
 
@@ -993,6 +979,13 @@ CREATE INDEX idx_chamdiem_namhoc_tuan ON public.chamdiem USING btree (namhoc, tu
 --
 
 CREATE INDEX idx_chamdiem_thoigian_context ON public.chamdiem USING btree (namhoc, hocky, tuan);
+
+
+--
+-- Name: idx_chamdiem_thongke; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_thongke ON public.chamdiem USING btree (namhoc, hocky, tuan, chamlop);
 
 
 --
@@ -2186,7 +2179,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict VYeGT5Lf3ZB3lc2xfRdn7xxdHa19sHvks4QFq6IIiaB1RDpc9r7OtmgYJhEQkVL
+\unrestrict OU4gQg0i2aTqUB2EkzOl8hsYgby0M72Ctfpj9TiWV0lzfbKLjbkIkvnKqC7V79P
 
 
 -- 1. Khởi tạo tài khoản quản trị
