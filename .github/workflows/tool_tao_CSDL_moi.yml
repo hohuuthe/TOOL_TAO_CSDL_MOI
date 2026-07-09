@@ -28,16 +28,16 @@ jobs:
       # --- GIAI ĐOẠN 1: TRÍCH XUẤT VÀ BỔ SUNG DỮ LIỆU CẤU HÌNH ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
-          MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
+          PGPASSWORD: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # 1. Trích xuất cấu trúc nguyên bản bằng chuỗi kết nối theo chuẩn mới của Supabase
-          /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres:$MK_GOC@$ID_GOC.supabase.pooler.supabase.com:6543/postgres" --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # 1. Trích xuất cấu trúc bằng cách tách tham số (Sử dụng cổng 5432 trực tiếp để tránh lỗi pooler nếu chỉ dump schema)
+          /usr/lib/postgresql/17/bin/pg_dump -h "db.$ID_GOC.supabase.co" -p 5432 -U postgres -d postgres --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
           # 2. Lọc bỏ các lệnh hệ thống gây lỗi permission trên Supabase
           sed -i '/^CREATE SCHEMA/d; /^ALTER SCHEMA/d; /^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d; /^ALTER DEFAULT PRIVILEGES/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
-          # 3. CHÈN THÊM CÁC DÒNG CẤU HÌNH MẶC ĐỊNH (ADMIN, DUY TRÌ CSDL, GITHUB SETTINGS)
+          # 3. CHÈN THÊM CÁC DÒNG CẤU HÌNH MẶC ĐỊNH
           cat >> supabase/migrations/20260510000000_khoi_tao_cau_truc.sql <<'EOF'
 
           -- 1. Khởi tạo tài khoản quản trị
@@ -77,11 +77,11 @@ jobs:
       # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI ---
       - name: Đẩy cấu trúc sang Dự án Mới
         env:
+          PGPASSWORD: ${{ secrets.TARGET_DB_PASSWORD }}
           ID_MOI: ${{ secrets.TARGET_PROJECT_ID }}
-          MK_MOI: ${{ secrets.TARGET_DB_PASSWORD }}
         run: |
-          # Đẩy file cấu trúc lên Database đích thông qua tên miền định tuyến Pooler mới
-          /usr/lib/postgresql/17/bin/psql "postgresql://postgres:$MK_MOI@$ID_MOI.supabase.pooler.supabase.com:6543/postgres" -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Sử dụng cổng kết nối trực tiếp 5432 để nạp cấu trúc giúp chạy ổn định 100% không qua trung gian kết nối mạng Pooler
+          /usr/lib/postgresql/17/bin/psql -h "db.$ID_MOI.supabase.co" -p 5432 -U postgres -d postgres -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       - name: Lưu trữ bản mẫu
         run: |
