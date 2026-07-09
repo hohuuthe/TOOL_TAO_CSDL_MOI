@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict OU4gQg0i2aTqUB2EkzOl8hsYgby0M72Ctfpj9TiWV0lzfbKLjbkIkvnKqC7V79P
+\restrict 6iBBnhpn0hFpzQvvRUaoB2vDImvNkYsVMPLE1hYVIqVZGnzNeycnQ5MoUc5hXK0
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
@@ -954,31 +954,31 @@ CREATE INDEX idx_chamdiem_lopcham_chamlop ON public.chamdiem USING btree (lopcha
 
 
 --
--- Name: idx_chamdiem_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_optimization_chamlop; Type: INDEX; Schema: public; Owner: postgres
 --
 
-CREATE INDEX idx_chamdiem_namhoc ON public.chamdiem USING btree (namhoc);
-
-
---
--- Name: idx_chamdiem_namhoc_hocky_tuan; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_chamdiem_namhoc_hocky_tuan ON public.chamdiem USING btree (namhoc, hocky, tuan);
+CREATE INDEX idx_chamdiem_optimization_chamlop ON public.chamdiem USING btree (chamlop);
 
 
 --
--- Name: idx_chamdiem_namhoc_tuan; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_optimization_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
-CREATE INDEX idx_chamdiem_namhoc_tuan ON public.chamdiem USING btree (namhoc, tuan);
+CREATE INDEX idx_chamdiem_optimization_chidoan_id ON public.chamdiem USING btree (chidoan_id);
 
 
 --
--- Name: idx_chamdiem_thoigian_context; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_optimization_namhoc_hocky_tuan; Type: INDEX; Schema: public; Owner: postgres
 --
 
-CREATE INDEX idx_chamdiem_thoigian_context ON public.chamdiem USING btree (namhoc, hocky, tuan);
+CREATE INDEX idx_chamdiem_optimization_namhoc_hocky_tuan ON public.chamdiem USING btree (namhoc, hocky, tuan);
+
+
+--
+-- Name: idx_chamdiem_optimization_namhoc_tuan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_chamdiem_optimization_namhoc_tuan ON public.chamdiem USING btree (namhoc, tuan);
 
 
 --
@@ -986,13 +986,6 @@ CREATE INDEX idx_chamdiem_thoigian_context ON public.chamdiem USING btree (namho
 --
 
 CREATE INDEX idx_chamdiem_thongke ON public.chamdiem USING btree (namhoc, hocky, tuan, chamlop);
-
-
---
--- Name: idx_doanvien_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_doanvien_chidoan_id ON public.doanvien USING btree (chidoan_id);
 
 
 --
@@ -1024,13 +1017,6 @@ CREATE INDEX idx_dotptdoanvien_nam_hk ON public.dotptdoanvien USING btree (namho
 
 
 --
--- Name: idx_dotptdoanvien_namhoc; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_dotptdoanvien_namhoc ON public.dotptdoanvien USING btree (namhoc);
-
-
---
 -- Name: idx_namhoc_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -1056,20 +1042,6 @@ CREATE INDEX idx_phancong_context ON public.phancong USING btree (namhoc, hocky,
 --
 
 CREATE INDEX idx_phancong_lopcham ON public.phancong USING btree (lopcham);
-
-
---
--- Name: idx_phancong_namhoc; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_phancong_namhoc ON public.phancong USING btree (namhoc);
-
-
---
--- Name: idx_phancong_namhoc_hocky_tuan; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_phancong_namhoc_hocky_tuan ON public.phancong USING btree (namhoc, hocky, tuan);
 
 
 --
@@ -1136,10 +1108,10 @@ CREATE INDEX idx_ql_nop_bc_doanvien ON public.ql_nop_bc USING btree (doanvien_id
 
 
 --
--- Name: idx_qlchidoan_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_qlchidoan_optimization_namhoc; Type: INDEX; Schema: public; Owner: postgres
 --
 
-CREATE INDEX idx_qlchidoan_namhoc ON public.qlchidoan USING btree (namhoc);
+CREATE INDEX idx_qlchidoan_optimization_namhoc ON public.qlchidoan USING btree (namhoc);
 
 
 --
@@ -1192,13 +1164,6 @@ CREATE INDEX idx_tieuchitd_context ON public.tieuchitd USING btree (namhoc, hock
 
 
 --
--- Name: idx_tieuchitd_namhoc; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_tieuchitd_namhoc ON public.tieuchitd USING btree (namhoc);
-
-
---
 -- Name: idx_tuan_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -1213,10 +1178,10 @@ CREATE INDEX idx_tuanhoc_context ON public.tuanhoc USING btree (namhoc, hocky, t
 
 
 --
--- Name: idx_tuanhoc_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_tuanhoc_optimization_namhoc_hocky; Type: INDEX; Schema: public; Owner: postgres
 --
 
-CREATE INDEX idx_tuanhoc_namhoc ON public.tuanhoc USING btree (namhoc);
+CREATE INDEX idx_tuanhoc_optimization_namhoc_hocky ON public.tuanhoc USING btree (namhoc, hocky);
 
 
 --
@@ -2179,7 +2144,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict OU4gQg0i2aTqUB2EkzOl8hsYgby0M72Ctfpj9TiWV0lzfbKLjbkIkvnKqC7V79P
+\unrestrict 6iBBnhpn0hFpzQvvRUaoB2vDImvNkYsVMPLE1hYVIqVZGnzNeycnQ5MoUc5hXK0
 
 
 -- 1. Khởi tạo tài khoản quản trị
