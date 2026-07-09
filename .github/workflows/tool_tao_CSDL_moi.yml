@@ -28,16 +28,16 @@ jobs:
       # --- GIAI ĐOẠN 1: TRÍCH XUẤT VÀ BỔ SUNG DỮ LIỆU CẤU HÌNH ---
       - name: Lấy cấu trúc từ Dự án Gốc
         env:
-          PGPASSWORD: ${{ secrets.SOURCE_DB_PASSWORD }}
+          MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # Dùng tham số -4 để ép pg_dump kết nối qua IPv4, đổi lại host pooler chung kèm định tuyến user dạng cũ/mới tương thích rộng
-          /usr/lib/postgresql/17/bin/pg_dump -4 -h "aws-1-ap-southeast-1.pooler.supabase.com" -p 6543 -U "postgres.$ID_GOC" -d postgres --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # 1. Trích xuất cấu trúc nguyên bản
+          /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres.$ID_GOC:$MK_GOC@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
-          # Lọc bỏ các lệnh hệ thống gây lỗi permission trên Supabase
+          # 2. Lọc bỏ các lệnh hệ thống gây lỗi permission trên Supabase
           sed -i '/^CREATE SCHEMA/d; /^ALTER SCHEMA/d; /^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d; /^ALTER DEFAULT PRIVILEGES/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
-          # CHÈN THÊM CÁC DÒNG CẤU HÌNH MẶC ĐỊNH
+          # 3. CHÈN THÊM CÁC DÒNG CẤU HÌNH MẶC ĐỊNH (ADMIN, DUY TRÌ CSDL, GITHUB SETTINGS)
           cat >> supabase/migrations/20260510000000_khoi_tao_cau_truc.sql <<'EOF'
 
           -- 1. Khởi tạo tài khoản quản trị
@@ -73,20 +73,3 @@ jobs:
               'ghp_abc123...'
           ) ON CONFLICT (id) DO NOTHING;
           EOF
-
-      # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI ---
-      - name: Đẩy cấu trúc sang Dự án Mới
-        env:
-          PGPASSWORD: ${{ secrets.TARGET_DB_PASSWORD }}
-          ID_MOI: ${{ secrets.TARGET_PROJECT_ID }}
-        run: |
-          # Tiếp tục ép psql chạy qua IPv4 với tham số -4 kết nối đến host pooler công cộng ổn định
-          /usr/lib/postgresql/17/bin/psql -4 -h "aws-1-ap-southeast-1.pooler.supabase.com" -p 6543 -U "postgres.$ID_MOI" -d postgres -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
-
-      - name: Lưu trữ bản mẫu
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add supabase/
-          git commit -m "chore: cập nhật cấu trúc kèm cấu hình github ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
-          git push
