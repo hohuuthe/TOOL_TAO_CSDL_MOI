@@ -73,3 +73,13 @@ jobs:
               'ghp_abc123...'
           ) ON CONFLICT (id) DO NOTHING;
           EOF
+
+      # --- GIAI ĐOẠN 2: ĐẨY LÊN DỰ ÁN MỚI
+    
+      - name: Lưu trữ bản mẫu
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add supabase/
+          git commit -m "chore: cập nhật cấu trúc kèm cấu hình github ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git push
