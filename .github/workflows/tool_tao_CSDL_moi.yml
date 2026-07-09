@@ -31,8 +31,8 @@ jobs:
           MK_GOC: ${{ secrets.SOURCE_DB_PASSWORD }}
           ID_GOC: ${{ secrets.SOURCE_PROJECT_ID }}
         run: |
-          # 1. Trích xuất cấu trúc nguyên bản
-          /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres.$ID_GOC:$MK_GOC@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # 1. Trích xuất cấu trúc nguyên bản bằng chuỗi kết nối theo chuẩn mới của Supabase
+          /usr/lib/postgresql/17/bin/pg_dump "postgresql://postgres:$MK_GOC@$ID_GOC.supabase.pooler.supabase.com:6543/postgres" --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
           
           # 2. Lọc bỏ các lệnh hệ thống gây lỗi permission trên Supabase
           sed -i '/^CREATE SCHEMA/d; /^ALTER SCHEMA/d; /^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d; /^ALTER DEFAULT PRIVILEGES/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
@@ -80,7 +80,8 @@ jobs:
           ID_MOI: ${{ secrets.TARGET_PROJECT_ID }}
           MK_MOI: ${{ secrets.TARGET_DB_PASSWORD }}
         run: |
-          /usr/lib/postgresql/17/bin/psql "postgresql://postgres.$ID_MOI:$MK_MOI@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          # Đẩy file cấu trúc lên Database đích thông qua tên miền định tuyến Pooler mới
+          /usr/lib/postgresql/17/bin/psql "postgresql://postgres:$MK_MOI@$ID_MOI.supabase.pooler.supabase.com:6543/postgres" -f supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
 
       - name: Lưu trữ bản mẫu
         run: |
