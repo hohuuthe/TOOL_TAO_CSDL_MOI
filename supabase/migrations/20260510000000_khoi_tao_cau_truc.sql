@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict 6iBBnhpn0hFpzQvvRUaoB2vDImvNkYsVMPLE1hYVIqVZGnzNeycnQ5MoUc5hXK0
+\restrict gdUkWzNELbX3wAzjV6vNrfVa7l2nNSBQZmpPBWaBSRFmsVuYHppD8HBBMXMtQ8B
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
@@ -444,11 +444,93 @@ CREATE TABLE public.ql_baocao (
     huong_dan text,
     ngay_tao timestamp with time zone DEFAULT now(),
     nam_hoc_id uuid,
-    hoc_ky text
+    hoc_ky text,
+    config_noi_dung1 jsonb DEFAULT '{"type": "text", "label": "Nội dung 1", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung2 jsonb DEFAULT '{"type": "text", "label": "Nội dung 2", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung3 jsonb DEFAULT '{"type": "text", "label": "Nội dung 3", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung4 jsonb DEFAULT '{"type": "text", "label": "Nội dung 4", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung5 jsonb DEFAULT '{"type": "text", "label": "Nội dung 5", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung6 jsonb DEFAULT '{"type": "text", "label": "Nội dung 6", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung7 jsonb DEFAULT '{"type": "text", "label": "Nội dung 7", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung8 jsonb DEFAULT '{"type": "text", "label": "Nội dung 8", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung9 jsonb DEFAULT '{"type": "text", "label": "Nội dung 9", "enabled": true, "options": "", "required": false}'::jsonb,
+    config_noi_dung10 jsonb DEFAULT '{"type": "text", "label": "Nội dung 10", "enabled": true, "options": "", "required": false}'::jsonb,
+    allowed_file_types text DEFAULT 'image,video,pdf,doc'::text,
+    max_file_size integer DEFAULT 10
 );
 
 
 ALTER TABLE public.ql_baocao OWNER TO postgres;
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung1; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung1 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 1';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung2; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung2 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 2';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung3; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung3 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 3';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung4; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung4 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 4';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung5; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung5 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 5';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung6; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung6 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 6';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung7; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung7 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 7';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung8; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung8 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 8';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung9; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung9 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 9';
+
+
+--
+-- Name: COLUMN ql_baocao.config_noi_dung10; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.ql_baocao.config_noi_dung10 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 10';
+
 
 --
 -- Name: ql_nop_bc; Type: TABLE; Schema: public; Owner: postgres
@@ -2144,7 +2226,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 6iBBnhpn0hFpzQvvRUaoB2vDImvNkYsVMPLE1hYVIqVZGnzNeycnQ5MoUc5hXK0
+\unrestrict gdUkWzNELbX3wAzjV6vNrfVa7l2nNSBQZmpPBWaBSRFmsVuYHppD8HBBMXMtQ8B
 
 
 -- 1. Khởi tạo tài khoản quản trị
