@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict gdUkWzNELbX3wAzjV6vNrfVa7l2nNSBQZmpPBWaBSRFmsVuYHppD8HBBMXMtQ8B
+\restrict wZ7s5CnKTOj4MEEdAiK2fQT63OyI73LT8qmb8wZ28mTx7AU50HU5ST3Be7Xg5lz
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
@@ -634,7 +634,8 @@ CREATE TABLE public.settings (
     r2_access_key_id text,
     r2_secret_access_key text,
     r2_bucket_name text,
-    r2_custom_domain text
+    r2_custom_domain text,
+    show_class_select_gvcn text DEFAULT 'Không hiển thị'::text
 );
 
 
@@ -719,6 +720,31 @@ CREATE TABLE public.thongbao_hethong (
 
 
 ALTER TABLE public.thongbao_hethong OWNER TO postgres;
+
+--
+-- Name: thongbao_riengbiet; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.thongbao_riengbiet (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    namhoc_id uuid NOT NULL,
+    sender_id uuid NOT NULL,
+    sender_name text NOT NULL,
+    sender_role text NOT NULL,
+    title text NOT NULL,
+    content text NOT NULL,
+    attachments jsonb DEFAULT '[]'::jsonb,
+    target_roles jsonb DEFAULT '[]'::jsonb,
+    target_chidoan_ids jsonb DEFAULT '[]'::jsonb,
+    start_at timestamp with time zone DEFAULT now(),
+    end_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    read_by jsonb DEFAULT '[]'::jsonb
+);
+
+
+ALTER TABLE public.thongbao_riengbiet OWNER TO postgres;
 
 --
 -- Name: tieuchitd; Type: TABLE; Schema: public; Owner: postgres
@@ -937,6 +963,14 @@ ALTER TABLE ONLY public.theodoi360
 
 ALTER TABLE ONLY public.thongbao_hethong
     ADD CONSTRAINT thongbao_hethong_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: thongbao_riengbiet thongbao_riengbiet_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.thongbao_riengbiet
+    ADD CONSTRAINT thongbao_riengbiet_pkey PRIMARY KEY (id);
 
 
 --
@@ -1236,6 +1270,27 @@ CREATE INDEX idx_theodoi360_doanvien ON public.theodoi360 USING btree (doan_vien
 --
 
 CREATE INDEX idx_theodoi360_namhoc_tuan ON public.theodoi360 USING btree (nam_hoc_id, tuan_id);
+
+
+--
+-- Name: idx_thongbao_riengbiet_dates; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_thongbao_riengbiet_dates ON public.thongbao_riengbiet USING btree (start_at, end_at);
+
+
+--
+-- Name: idx_thongbao_riengbiet_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_thongbao_riengbiet_namhoc ON public.thongbao_riengbiet USING btree (namhoc_id);
+
+
+--
+-- Name: idx_thongbao_riengbiet_sender; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_thongbao_riengbiet_sender ON public.thongbao_riengbiet USING btree (sender_id);
 
 
 --
@@ -1546,6 +1601,22 @@ ALTER TABLE ONLY public.settings
 
 
 --
+-- Name: thongbao_riengbiet fk_thongbao_riengbiet_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.thongbao_riengbiet
+    ADD CONSTRAINT fk_thongbao_riengbiet_namhoc FOREIGN KEY (namhoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
+
+
+--
+-- Name: thongbao_riengbiet fk_thongbao_riengbiet_taikhoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.thongbao_riengbiet
+    ADD CONSTRAINT fk_thongbao_riengbiet_taikhoan FOREIGN KEY (sender_id) REFERENCES public.taikhoan(id) ON DELETE CASCADE;
+
+
+--
 -- Name: tieuchitd fk_tieuchitd_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -1787,6 +1858,15 @@ CREATE POLICY "Cho phép Admin quản lý cấu hình github" ON public.github_s
 
 
 --
+-- Name: thongbao_riengbiet Cho phép Admin và các quản trị viên quản lý thông b; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép Admin và các quản trị viên quản lý thông b" ON public.thongbao_riengbiet TO authenticated USING ((EXISTS ( SELECT 1
+   FROM public.taikhoan
+  WHERE ((taikhoan.id = auth.uid()) AND (taikhoan.role = ANY (ARRAY['Admin'::text, 'BGH'::text, 'BTV'::text, 'GVCN'::text]))))));
+
+
+--
 -- Name: push_subscriptions Cho phép DELETE push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
 --
 
@@ -1850,6 +1930,13 @@ CREATE POLICY "Cho phép cập nhật dữ liệu công khai" ON public.duytrics
 
 
 --
+-- Name: thongbao_riengbiet Cho phép cập nhật thông báo; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép cập nhật thông báo" ON public.thongbao_riengbiet FOR UPDATE USING (true) WITH CHECK (true);
+
+
+--
 -- Name: namhoc Cho phép người dùng xác thực có toàn quyền bảng n; Type: POLICY; Schema: public; Owner: postgres
 --
 
@@ -1861,6 +1948,34 @@ CREATE POLICY "Cho phép người dùng xác thực có toàn quyền bảng n" 
 --
 
 CREATE POLICY "Cho phép người dùng đã đăng nhập thao tác github_se" ON public.github_settings TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: thongbao_riengbiet Cho phép thêm thông báo; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép thêm thông báo" ON public.thongbao_riengbiet FOR INSERT WITH CHECK (true);
+
+
+--
+-- Name: thongbao_riengbiet Cho phép tất cả người dùng đọc thông báo; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép tất cả người dùng đọc thông báo" ON public.thongbao_riengbiet FOR SELECT USING (true);
+
+
+--
+-- Name: thongbao_riengbiet Cho phép tất cả tài khoản xem thông báo; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép tất cả tài khoản xem thông báo" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: thongbao_riengbiet Cho phép xóa thông báo; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép xóa thông báo" ON public.thongbao_riengbiet FOR DELETE USING (true);
 
 
 --
@@ -2005,6 +2120,12 @@ ALTER TABLE public.theodoi360 ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.thongbao_hethong ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: thongbao_riengbiet; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.thongbao_riengbiet ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: tieuchitd; Type: ROW SECURITY; Schema: public; Owner: postgres
@@ -2175,6 +2296,12 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 
 --
+-- Name: TABLE thongbao_riengbiet; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: TABLE tieuchitd; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -2226,7 +2353,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict gdUkWzNELbX3wAzjV6vNrfVa7l2nNSBQZmpPBWaBSRFmsVuYHppD8HBBMXMtQ8B
+\unrestrict wZ7s5CnKTOj4MEEdAiK2fQT63OyI73LT8qmb8wZ28mTx7AU50HU5ST3Be7Xg5lz
 
 
 -- 1. Khởi tạo tài khoản quản trị
