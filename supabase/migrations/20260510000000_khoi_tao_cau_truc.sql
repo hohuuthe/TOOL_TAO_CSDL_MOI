@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict wZ7s5CnKTOj4MEEdAiK2fQT63OyI73LT8qmb8wZ28mTx7AU50HU5ST3Be7Xg5lz
+\restrict DPfTeyKBYp5qPg5QEmdDMt7EUaIXCFGezqhFRIC7SwqxxS5ubPg3UkfBYksSaAQ
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
@@ -187,6 +187,66 @@ CREATE TABLE public.activity_logs (
 
 
 ALTER TABLE public.activity_logs OWNER TO postgres;
+
+--
+-- Name: cauhinh_tieuchi_xet_thidua; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.cauhinh_tieuchi_xet_thidua (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    namhoc_id uuid NOT NULL,
+    hoc_ky character varying(20) NOT NULL,
+    ten_tieuchi_1 character varying(255) DEFAULT 'Tiêu chí 1'::character varying,
+    sudung_1 boolean DEFAULT true,
+    kieudulieu_1 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_2 character varying(255) DEFAULT 'Tiêu chí 2'::character varying,
+    sudung_2 boolean DEFAULT true,
+    kieudulieu_2 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_3 character varying(255) DEFAULT 'Tiêu chí 3'::character varying,
+    sudung_3 boolean DEFAULT true,
+    kieudulieu_3 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_4 character varying(255) DEFAULT 'Tiêu chí 4'::character varying,
+    sudung_4 boolean DEFAULT true,
+    kieudulieu_4 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_5 character varying(255) DEFAULT 'Tiêu chí 5'::character varying,
+    sudung_5 boolean DEFAULT true,
+    kieudulieu_5 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_6 character varying(255) DEFAULT 'Tiêu chí 6'::character varying,
+    sudung_6 boolean DEFAULT false,
+    kieudulieu_6 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_7 character varying(255) DEFAULT 'Tiêu chí 7'::character varying,
+    sudung_7 boolean DEFAULT false,
+    kieudulieu_7 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_8 character varying(255) DEFAULT 'Tiêu chí 8'::character varying,
+    sudung_8 boolean DEFAULT false,
+    kieudulieu_8 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_9 character varying(255) DEFAULT 'Tiêu chí 9'::character varying,
+    sudung_9 boolean DEFAULT false,
+    kieudulieu_9 character varying(20) DEFAULT 'NUMBER'::character varying,
+    ten_tieuchi_10 character varying(255) DEFAULT 'Tiêu chí 10'::character varying,
+    sudung_10 boolean DEFAULT false,
+    kieudulieu_10 character varying(20) DEFAULT 'NUMBER'::character varying,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    ghi_chu text,
+    giai_thich text,
+    trang_thai character varying(30) DEFAULT 'dang_xet'::character varying,
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_hoc_ky_check CHECK (((hoc_ky)::text = ANY ((ARRAY['HK1'::character varying, 'HK2'::character varying, 'CA_NAM'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_10_check CHECK (((kieudulieu_10)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_1_check CHECK (((kieudulieu_1)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_2_check CHECK (((kieudulieu_2)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_3_check CHECK (((kieudulieu_3)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_4_check CHECK (((kieudulieu_4)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_5_check CHECK (((kieudulieu_5)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_6_check CHECK (((kieudulieu_6)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_7_check CHECK (((kieudulieu_7)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_8_check CHECK (((kieudulieu_8)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_9_check CHECK (((kieudulieu_9)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
+    CONSTRAINT chk_cauhinh_trang_thai CHECK (((trang_thai)::text = ANY ((ARRAY['dang_xet'::character varying, 'ban_du_thao'::character varying, 'ban_cong_bo'::character varying])::text[])))
+);
+
+
+ALTER TABLE public.cauhinh_tieuchi_xet_thidua OWNER TO postgres;
 
 --
 -- Name: chamdiem; Type: TABLE; Schema: public; Owner: postgres
@@ -790,11 +850,51 @@ CREATE TABLE public.tuanhoc (
 ALTER TABLE public.tuanhoc OWNER TO postgres;
 
 --
+-- Name: xet_thidua; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.xet_thidua (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    namhoc_id uuid NOT NULL,
+    hoc_ky character varying(20) NOT NULL,
+    chidoan_id uuid NOT NULL,
+    tong_diem_cham_tuan numeric(10,2) DEFAULT 0,
+    tieuchi_1 text DEFAULT ''::text,
+    tieuchi_2 text DEFAULT ''::text,
+    tieuchi_3 text DEFAULT ''::text,
+    tieuchi_4 text DEFAULT ''::text,
+    tieuchi_5 text DEFAULT ''::text,
+    tieuchi_6 text DEFAULT ''::text,
+    tieuchi_7 text DEFAULT ''::text,
+    tieuchi_8 text DEFAULT ''::text,
+    tieuchi_9 text DEFAULT ''::text,
+    tieuchi_10 text DEFAULT ''::text,
+    tong_diem numeric(10,2) DEFAULT 0,
+    xep_hang integer,
+    danh_hieu_thi_dua character varying(255) DEFAULT ''::character varying,
+    ghi_chu text DEFAULT ''::text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT xet_thidua_hoc_ky_check CHECK (((hoc_ky)::text = ANY ((ARRAY['HK1'::character varying, 'HK2'::character varying, 'CA_NAM'::character varying])::text[])))
+);
+
+
+ALTER TABLE public.xet_thidua OWNER TO postgres;
+
+--
 -- Name: activity_logs activity_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.activity_logs
     ADD CONSTRAINT activity_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: cauhinh_tieuchi_xet_thidua cauhinh_tieuchi_xet_thidua_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
+    ADD CONSTRAINT cauhinh_tieuchi_xet_thidua_pkey PRIMARY KEY (id);
 
 
 --
@@ -998,6 +1098,14 @@ ALTER TABLE ONLY public.tuanhoc
 
 
 --
+-- Name: cauhinh_tieuchi_xet_thidua unique_cauhinh_namhoc_hocky; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
+    ADD CONSTRAINT unique_cauhinh_namhoc_hocky UNIQUE (namhoc_id, hoc_ky);
+
+
+--
 -- Name: chamdiem unique_chamdiem_record; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -1014,6 +1122,22 @@ ALTER TABLE ONLY public.qlchidoan
 
 
 --
+-- Name: xet_thidua unique_xet_thidua_chidoan_hocky; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.xet_thidua
+    ADD CONSTRAINT unique_xet_thidua_chidoan_hocky UNIQUE (namhoc_id, hoc_ky, chidoan_id);
+
+
+--
+-- Name: xet_thidua xet_thidua_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.xet_thidua
+    ADD CONSTRAINT xet_thidua_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: idx_activity_logs_created_at; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -1025,6 +1149,13 @@ CREATE INDEX idx_activity_logs_created_at ON public.activity_logs USING btree (c
 --
 
 CREATE INDEX idx_activity_logs_user_id ON public.activity_logs USING btree (user_id);
+
+
+--
+-- Name: idx_cauhinh_thidua_namhoc_hocky; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_cauhinh_thidua_namhoc_hocky ON public.cauhinh_tieuchi_xet_thidua USING btree (namhoc_id, hoc_ky);
 
 
 --
@@ -1322,6 +1453,20 @@ CREATE INDEX idx_tuanhoc_optimization_namhoc_hocky ON public.tuanhoc USING btree
 
 
 --
+-- Name: idx_xet_thidua_chidoan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_xet_thidua_chidoan ON public.xet_thidua USING btree (chidoan_id);
+
+
+--
+-- Name: idx_xet_thidua_namhoc_hocky; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_xet_thidua_namhoc_hocky ON public.xet_thidua USING btree (namhoc_id, hoc_ky);
+
+
+--
 -- Name: ngay_3_5_idx_ptdoanvien_doanvien_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -1462,6 +1607,14 @@ ALTER TABLE ONLY public.ptdoanvien
 
 ALTER TABLE ONLY public.activity_logs
     ADD CONSTRAINT activity_logs_namhoc_fkey FOREIGN KEY (namhoc) REFERENCES public.namhoc(id);
+
+
+--
+-- Name: cauhinh_tieuchi_xet_thidua cauhinh_tieuchi_xet_thidua_namhoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
+    ADD CONSTRAINT cauhinh_tieuchi_xet_thidua_namhoc_id_fkey FOREIGN KEY (namhoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
 
 
 --
@@ -1702,6 +1855,22 @@ ALTER TABLE ONLY public.theodoi360
 
 ALTER TABLE ONLY public.theodoi360
     ADD CONSTRAINT theodoi360_tuan_fkey FOREIGN KEY (tuan_id) REFERENCES public.tuanhoc(id);
+
+
+--
+-- Name: xet_thidua xet_thidua_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.xet_thidua
+    ADD CONSTRAINT xet_thidua_chidoan_id_fkey FOREIGN KEY (chidoan_id) REFERENCES public.qlchidoan(id) ON DELETE CASCADE;
+
+
+--
+-- Name: xet_thidua xet_thidua_namhoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.xet_thidua
+    ADD CONSTRAINT xet_thidua_namhoc_id_fkey FOREIGN KEY (namhoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
 
 
 --
@@ -2194,6 +2363,12 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 
 --
+-- Name: TABLE cauhinh_tieuchi_xet_thidua; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: TABLE chamdiem; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -2314,6 +2489,12 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 
 --
+-- Name: TABLE xet_thidua; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: DEFAULT PRIVILEGES FOR SEQUENCES; Type: DEFAULT ACL; Schema: public; Owner: postgres
 --
 
@@ -2353,7 +2534,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict wZ7s5CnKTOj4MEEdAiK2fQT63OyI73LT8qmb8wZ28mTx7AU50HU5ST3Be7Xg5lz
+\unrestrict DPfTeyKBYp5qPg5QEmdDMt7EUaIXCFGezqhFRIC7SwqxxS5ubPg3UkfBYksSaAQ
 
 
 -- 1. Khởi tạo tài khoản quản trị
