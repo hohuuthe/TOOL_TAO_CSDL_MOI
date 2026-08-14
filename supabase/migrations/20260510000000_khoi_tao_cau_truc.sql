@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict DPfTeyKBYp5qPg5QEmdDMt7EUaIXCFGezqhFRIC7SwqxxS5ubPg3UkfBYksSaAQ
+\restrict aAIlGG4JCTVeALkabrGt515c7EfEl66RfmuSHX2Z4oYBMA2nrilF9WShSp8Q9Bt
 
 -- Dumped from database version 17.6
--- Dumped by pg_dump version 17.10 (Ubuntu 17.10-1.pgdg24.04+1)
+-- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -32,6 +32,22 @@ SET row_security = off;
 
 COMMENT ON SCHEMA public IS 'standard public schema';
 
+
+--
+-- Name: get_secure_role(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_secure_role() RETURNS text
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+  SELECT role FROM public.taikhoan
+  WHERE username = split_part(auth.email(), '@', 1)
+  LIMIT 1;
+$$;
+
+
+ALTER FUNCTION public.get_secure_role() OWNER TO postgres;
 
 --
 -- Name: handle_chi_doan_deletion(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -123,8 +139,11 @@ ALTER TABLE public.taikhoan OWNER TO postgres;
 
 CREATE FUNCTION public.rpc_get_user_by_username(p_username text) RETURNS SETOF public.taikhoan
     LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public'
     AS $$
-  SELECT * FROM taikhoan WHERE username = p_username OR username = lower(p_username) LIMIT 1;
+  SELECT * FROM public.taikhoan 
+  WHERE username = p_username 
+  LIMIT 1;
 $$;
 
 
@@ -339,6 +358,101 @@ CREATE TABLE public.duytricsdl (
 
 
 ALTER TABLE public.duytricsdl OWNER TO postgres;
+
+--
+-- Name: gio_hoc_tap; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.gio_hoc_tap (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    namhoc_id uuid NOT NULL,
+    chidoan_id uuid NOT NULL,
+    tuan_id uuid NOT NULL,
+    so_tot integer DEFAULT 0,
+    so_kha integer DEFAULT 0,
+    so_tb integer DEFAULT 0,
+    so_yeu integer DEFAULT 0,
+    diem_tot_cauhinh numeric DEFAULT 10,
+    diem_kha_cauhinh numeric DEFAULT 7,
+    diem_tb_cauhinh numeric DEFAULT 4,
+    diem_yeu_cauhinh numeric DEFAULT 1,
+    diem_tb_hoc_tap numeric(5,2) DEFAULT 0.00,
+    updated_at timestamp with time zone DEFAULT timezone('utc'::text, now()),
+    hocky text
+);
+
+
+ALTER TABLE public.gio_hoc_tap OWNER TO postgres;
+
+--
+-- Name: TABLE gio_hoc_tap; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON TABLE public.gio_hoc_tap IS 'Bảng quản lý giờ học tập và điểm trung bình học tập của Chi đoàn theo tuần và năm học';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.namhoc_id; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.namhoc_id IS 'Liên kết với năm học hiện tại';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.chidoan_id; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.chidoan_id IS 'Liên kết với Chi đoàn được xếp loại giờ học';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.tuan_id; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.tuan_id IS 'Liên kết với tuần học tương ứng';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.diem_tot_cauhinh; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.diem_tot_cauhinh IS 'Điểm cấu hình của giờ Tốt tại thời điểm nhập';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.diem_kha_cauhinh; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.diem_kha_cauhinh IS 'Điểm cấu hình của giờ Khá tại thời điểm nhập';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.diem_tb_cauhinh; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.diem_tb_cauhinh IS 'Điểm cấu hình của giờ Trung bình tại thời điểm nhập';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.diem_yeu_cauhinh; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.diem_yeu_cauhinh IS 'Điểm cấu hình của giờ Yếu tại thời điểm nhập';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.diem_tb_hoc_tap; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.diem_tb_hoc_tap IS 'Điểm trung bình học tập thực tế cuối cùng của tuần';
+
+
+--
+-- Name: COLUMN gio_hoc_tap.hocky; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.gio_hoc_tap.hocky IS 'Học kỳ diễn ra tuần học tập (ví dụ: HK1, HK2)';
+
 
 --
 -- Name: github_settings; Type: TABLE; Schema: public; Owner: postgres
@@ -645,11 +759,27 @@ CREATE TABLE public.qlchidoan (
     gvcn text,
     namhoc uuid NOT NULL,
     updatedat timestamp with time zone DEFAULT now(),
-    createdat timestamp with time zone DEFAULT now()
+    createdat timestamp with time zone DEFAULT now(),
+    he_so_tru numeric DEFAULT 1,
+    he_so_cong numeric DEFAULT 1
 );
 
 
 ALTER TABLE public.qlchidoan OWNER TO postgres;
+
+--
+-- Name: COLUMN qlchidoan.he_so_tru; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.qlchidoan.he_so_tru IS 'Hệ số nhân điểm trừ riêng biệt cho từng Chi đoàn';
+
+
+--
+-- Name: COLUMN qlchidoan.he_so_cong; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.qlchidoan.he_so_cong IS 'Hệ số nhân điểm cộng riêng biệt cho từng Chi đoàn';
+
 
 --
 -- Name: settings; Type: TABLE; Schema: public; Owner: postgres
@@ -695,7 +825,13 @@ CREATE TABLE public.settings (
     r2_secret_access_key text,
     r2_bucket_name text,
     r2_custom_domain text,
-    show_class_select_gvcn text DEFAULT 'Không hiển thị'::text
+    show_class_select_gvcn text DEFAULT 'Không hiển thị'::text,
+    diem_tot numeric DEFAULT 10,
+    diem_kha numeric DEFAULT 7,
+    diem_tb numeric DEFAULT 4,
+    diem_yeu numeric DEFAULT 1,
+    ti_trong_diem_tuan numeric DEFAULT 50,
+    ti_trong_diem_hoc_tap numeric DEFAULT 50
 );
 
 
@@ -734,6 +870,48 @@ COMMENT ON COLUMN public.settings.autopenaltyenabled IS 'Trạng thái bật/t�
 --
 
 COMMENT ON COLUMN public.settings.autopenaltyreporter IS 'Tên người chấm hiển thị trong bảng điểm';
+
+
+--
+-- Name: COLUMN settings.diem_tot; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.settings.diem_tot IS 'Điểm cấu hình mặc định cho giờ Tốt (áp dụng khi khởi tạo tuần mới)';
+
+
+--
+-- Name: COLUMN settings.diem_kha; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.settings.diem_kha IS 'Điểm cấu hình mặc định cho giờ Khá (áp dụng khi khởi tạo tuần mới)';
+
+
+--
+-- Name: COLUMN settings.diem_tb; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.settings.diem_tb IS 'Điểm cấu hình mặc định cho giờ Trung bình (áp dụng khi khởi tạo tuần mới)';
+
+
+--
+-- Name: COLUMN settings.diem_yeu; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.settings.diem_yeu IS 'Điểm cấu hình mặc định cho giờ Yếu (áp dụng khi khởi tạo tuần mới)';
+
+
+--
+-- Name: COLUMN settings.ti_trong_diem_tuan; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.settings.ti_trong_diem_tuan IS 'Tỉ trọng % đóng góp của điểm tuần (trừ vi phạm) vào tổng điểm thi đua chung';
+
+
+--
+-- Name: COLUMN settings.ti_trong_diem_hoc_tap; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.settings.ti_trong_diem_hoc_tap IS 'Tỉ trọng % đóng góp của điểm trung bình giờ học tập vào tổng điểm thi đua chung';
 
 
 --
@@ -930,6 +1108,14 @@ ALTER TABLE ONLY public.duytricsdl
 
 
 --
+-- Name: gio_hoc_tap gio_hoc_tap_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.gio_hoc_tap
+    ADD CONSTRAINT gio_hoc_tap_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: github_settings github_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -1111,6 +1297,14 @@ ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
 
 ALTER TABLE ONLY public.chamdiem
     ADD CONSTRAINT unique_chamdiem_record UNIQUE (namhoc, hocky, tuan, thu, ngay, lopcham, chamlop, doanvienid, matieuchi, tentieuchi, loaitieuchi, diemtru, diemcong, chidoan_id);
+
+
+--
+-- Name: gio_hoc_tap unique_chidoan_tuan_namhoc; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.gio_hoc_tap
+    ADD CONSTRAINT unique_chidoan_tuan_namhoc UNIQUE (chidoan_id, tuan_id, namhoc_id);
 
 
 --
@@ -1682,6 +1876,30 @@ ALTER TABLE ONLY public.dotptdoanvien
 
 
 --
+-- Name: gio_hoc_tap fk_giohoctap_chidoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.gio_hoc_tap
+    ADD CONSTRAINT fk_giohoctap_chidoan FOREIGN KEY (chidoan_id) REFERENCES public.qlchidoan(id) ON DELETE CASCADE;
+
+
+--
+-- Name: gio_hoc_tap fk_giohoctap_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.gio_hoc_tap
+    ADD CONSTRAINT fk_giohoctap_namhoc FOREIGN KEY (namhoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
+
+
+--
+-- Name: gio_hoc_tap fk_giohoctap_tuan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.gio_hoc_tap
+    ADD CONSTRAINT fk_giohoctap_tuan FOREIGN KEY (tuan_id) REFERENCES public.tuanhoc(id) ON DELETE CASCADE;
+
+
+--
 -- Name: phancong fk_phancong_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -1874,40 +2092,19 @@ ALTER TABLE ONLY public.xet_thidua
 
 
 --
+-- Name: push_subscriptions Admin được lấy danh sách gửi; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Admin được lấy danh sách gửi" ON public.push_subscriptions FOR SELECT TO authenticated USING ((public.get_secure_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text])));
+
+
+--
 -- Name: activity_logs Admins can view all activity logs; Type: POLICY; Schema: public; Owner: postgres
 --
 
 CREATE POLICY "Admins can view all activity logs" ON public.activity_logs FOR SELECT TO authenticated USING ((EXISTS ( SELECT 1
    FROM public.taikhoan
   WHERE ((taikhoan.id = auth.uid()) AND (taikhoan.role = 'Admin'::text)))));
-
-
---
--- Name: theodoi360 Allow authenticated users to DELETE; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Allow authenticated users to DELETE" ON public.theodoi360 FOR DELETE TO authenticated USING (true);
-
-
---
--- Name: theodoi360 Allow authenticated users to INSERT; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Allow authenticated users to INSERT" ON public.theodoi360 FOR INSERT TO authenticated WITH CHECK (true);
-
-
---
--- Name: theodoi360 Allow authenticated users to SELECT; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Allow authenticated users to SELECT" ON public.theodoi360 FOR SELECT TO authenticated USING (true);
-
-
---
--- Name: theodoi360 Allow authenticated users to UPDATE; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Allow authenticated users to UPDATE" ON public.theodoi360 FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 
 
 --
@@ -1932,31 +2129,10 @@ CREATE POLICY "Authenticated users can insert activity logs" ON public.activity_
 
 
 --
--- Name: chamdiem Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Authenticated users only" ON public.chamdiem TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: doanvien Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Authenticated users only" ON public.doanvien TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
 -- Name: dotptdoanvien Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
 --
 
 CREATE POLICY "Authenticated users only" ON public.dotptdoanvien TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: namhoc Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Authenticated users only" ON public.namhoc TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
 
 
 --
@@ -1967,38 +2143,10 @@ CREATE POLICY "Authenticated users only" ON public.phancong TO authenticated USI
 
 
 --
--- Name: phanquyen Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Authenticated users only" ON public.phanquyen TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
 -- Name: ptdoanvien Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
 --
 
 CREATE POLICY "Authenticated users only" ON public.ptdoanvien TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: qlchidoan Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Authenticated users only" ON public.qlchidoan TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: settings Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Authenticated users only" ON public.settings TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: taikhoan Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Authenticated users only" ON public.taikhoan TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
 
 
 --
@@ -2016,17 +2164,6 @@ CREATE POLICY "Authenticated users only" ON public.tuanhoc TO authenticated USIN
 
 
 --
--- Name: github_settings Cho phép Admin quản lý cấu hình github; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép Admin quản lý cấu hình github" ON public.github_settings TO authenticated USING ((EXISTS ( SELECT 1
-   FROM public.taikhoan
-  WHERE ((taikhoan.id = auth.uid()) AND (taikhoan.role = 'Admin'::text))))) WITH CHECK ((EXISTS ( SELECT 1
-   FROM public.taikhoan
-  WHERE ((taikhoan.id = auth.uid()) AND (taikhoan.role = 'Admin'::text)))));
-
-
---
 -- Name: thongbao_riengbiet Cho phép Admin và các quản trị viên quản lý thông b; Type: POLICY; Schema: public; Owner: postgres
 --
 
@@ -2036,59 +2173,24 @@ CREATE POLICY "Cho phép Admin và các quản trị viên quản lý thông b" 
 
 
 --
--- Name: push_subscriptions Cho phép DELETE push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_hethong Cho phép INSERT thongbao_hethong; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép DELETE push_subscriptions khi đã đăng nhập" ON public.push_subscriptions FOR DELETE USING ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: thongbao_hethong Cho phép DELETE thongbao_hethong khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép DELETE thongbao_hethong khi đã đăng nhập" ON public.thongbao_hethong FOR DELETE USING ((auth.role() = 'authenticated'::text));
+CREATE POLICY "Cho phép INSERT thongbao_hethong" ON public.thongbao_hethong FOR INSERT TO authenticated WITH CHECK (true);
 
 
 --
--- Name: push_subscriptions Cho phép INSERT push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_hethong Cho phép SELECT thongbao_hethong; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép INSERT push_subscriptions khi đã đăng nhập" ON public.push_subscriptions FOR INSERT WITH CHECK ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: thongbao_hethong Cho phép INSERT thongbao_hethong khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép INSERT thongbao_hethong khi đã đăng nhập" ON public.thongbao_hethong FOR INSERT WITH CHECK ((auth.role() = 'authenticated'::text));
+CREATE POLICY "Cho phép SELECT thongbao_hethong" ON public.thongbao_hethong FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: push_subscriptions Cho phép SELECT push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_hethong Cho phép UPDATE thongbao_hethong; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép SELECT push_subscriptions khi đã đăng nhập" ON public.push_subscriptions FOR SELECT USING ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: thongbao_hethong Cho phép SELECT thongbao_hethong khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép SELECT thongbao_hethong khi đã đăng nhập" ON public.thongbao_hethong FOR SELECT USING ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: push_subscriptions Cho phép UPDATE push_subscriptions khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép UPDATE push_subscriptions khi đã đăng nhập" ON public.push_subscriptions FOR UPDATE USING ((auth.role() = 'authenticated'::text));
-
-
---
--- Name: thongbao_hethong Cho phép UPDATE thongbao_hethong khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép UPDATE thongbao_hethong khi đã đăng nhập" ON public.thongbao_hethong FOR UPDATE USING ((auth.role() = 'authenticated'::text));
+CREATE POLICY "Cho phép UPDATE thongbao_hethong" ON public.thongbao_hethong FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 
 
 --
@@ -2099,13 +2201,6 @@ CREATE POLICY "Cho phép cập nhật dữ liệu công khai" ON public.duytrics
 
 
 --
--- Name: thongbao_riengbiet Cho phép cập nhật thông báo; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép cập nhật thông báo" ON public.thongbao_riengbiet FOR UPDATE USING (true) WITH CHECK (true);
-
-
---
 -- Name: namhoc Cho phép người dùng xác thực có toàn quyền bảng n; Type: POLICY; Schema: public; Owner: postgres
 --
 
@@ -2113,24 +2208,52 @@ CREATE POLICY "Cho phép người dùng xác thực có toàn quyền bảng n" 
 
 
 --
--- Name: github_settings Cho phép người dùng đã đăng nhập thao tác github_se; Type: POLICY; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua Cho phép người dùng đã đăng nhập cập nhật cauhin; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép người dùng đã đăng nhập thao tác github_se" ON public.github_settings TO authenticated USING (true) WITH CHECK (true);
-
-
---
--- Name: thongbao_riengbiet Cho phép thêm thông báo; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép thêm thông báo" ON public.thongbao_riengbiet FOR INSERT WITH CHECK (true);
+CREATE POLICY "Cho phép người dùng đã đăng nhập cập nhật cauhin" ON public.cauhinh_tieuchi_xet_thidua TO authenticated USING (true) WITH CHECK (true);
 
 
 --
--- Name: thongbao_riengbiet Cho phép tất cả người dùng đọc thông báo; Type: POLICY; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap Cho phép người dùng đã đăng nhập cập nhật gio_ho; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép tất cả người dùng đọc thông báo" ON public.thongbao_riengbiet FOR SELECT USING (true);
+CREATE POLICY "Cho phép người dùng đã đăng nhập cập nhật gio_ho" ON public.gio_hoc_tap TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: xet_thidua Cho phép người dùng đã đăng nhập cập nhật xet_th; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép người dùng đã đăng nhập cập nhật xet_th" ON public.xet_thidua TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: chamdiem Cho phép thao tác chamdiem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép thao tác chamdiem" ON public.chamdiem TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: doanvien Cho phép thao tác doanvien; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép thao tác doanvien" ON public.doanvien TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: qlchidoan Cho phép thao tác qlchidoan; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép thao tác qlchidoan" ON public.qlchidoan TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: theodoi360 Cho phép thao tác theodoi360 khi đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép thao tác theodoi360 khi đăng nhập" ON public.theodoi360 TO authenticated USING (true) WITH CHECK (true);
 
 
 --
@@ -2138,13 +2261,6 @@ CREATE POLICY "Cho phép tất cả người dùng đọc thông báo" ON public
 --
 
 CREATE POLICY "Cho phép tất cả tài khoản xem thông báo" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING (true);
-
-
---
--- Name: thongbao_riengbiet Cho phép xóa thông báo; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Cho phép xóa thông báo" ON public.thongbao_riengbiet FOR DELETE USING (true);
 
 
 --
@@ -2162,6 +2278,55 @@ CREATE POLICY "Cho phép đọc dữ liệu công khai" ON public.duytricsdl FOR
 
 
 --
+-- Name: phanquyen Cho phép đọc phanquyen; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép đọc phanquyen" ON public.phanquyen FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: settings Cho phép đọc settings; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép đọc settings" ON public.settings FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: taikhoan Cho phép đọc taikhoan; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép đọc taikhoan" ON public.taikhoan FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: thongbao_hethong Chỉ Admin được DELETE thongbao_hethong; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Chỉ Admin được DELETE thongbao_hethong" ON public.thongbao_hethong FOR DELETE TO authenticated USING ((public.get_secure_role() = 'Admin'::text));
+
+
+--
+-- Name: github_settings Chỉ Admin được sửa github_settings; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Chỉ Admin được sửa github_settings" ON public.github_settings TO authenticated USING ((public.get_secure_role() = 'Admin'::text)) WITH CHECK ((public.get_secure_role() = 'Admin'::text));
+
+
+--
+-- Name: phanquyen Chỉ Admin được sửa phanquyen; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Chỉ Admin được sửa phanquyen" ON public.phanquyen TO authenticated USING ((public.get_secure_role() = 'Admin'::text)) WITH CHECK ((public.get_secure_role() = 'Admin'::text));
+
+
+--
+-- Name: settings Chỉ Admin được sửa settings; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Chỉ Admin được sửa settings" ON public.settings TO authenticated USING ((public.get_secure_role() = 'Admin'::text)) WITH CHECK ((public.get_secure_role() = 'Admin'::text));
+
+
+--
 -- Name: duytricsdl Chỉ cho phép thêm khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
 --
 
@@ -2176,10 +2341,23 @@ CREATE POLICY "Chỉ cho phép xóa khi đã đăng nhập" ON public.duytricsdl
 
 
 --
--- Name: taikhoan Enable read access for all users; Type: POLICY; Schema: public; Owner: postgres
+-- Name: taikhoan Chỉ quản trị được sửa taikhoan; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Enable read access for all users" ON public.taikhoan FOR SELECT USING (true);
+CREATE POLICY "Chỉ quản trị được sửa taikhoan" ON public.taikhoan TO authenticated USING ((public.get_secure_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text, 'BGH'::text]))) WITH CHECK ((public.get_secure_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text, 'BGH'::text])));
+
+
+--
+-- Name: push_subscriptions Người dùng quản lý thiết bị của mình; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Người dùng quản lý thiết bị của mình" ON public.push_subscriptions TO authenticated USING ((user_id = ( SELECT taikhoan.id
+   FROM public.taikhoan
+  WHERE (taikhoan.username = split_part(auth.email(), '@'::text, 1))
+ LIMIT 1))) WITH CHECK ((user_id = ( SELECT taikhoan.id
+   FROM public.taikhoan
+  WHERE (taikhoan.username = split_part(auth.email(), '@'::text, 1))
+ LIMIT 1)));
 
 
 --
@@ -2187,6 +2365,12 @@ CREATE POLICY "Enable read access for all users" ON public.taikhoan FOR SELECT U
 --
 
 ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: cauhinh_tieuchi_xet_thidua; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.cauhinh_tieuchi_xet_thidua ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: chamdiem; Type: ROW SECURITY; Schema: public; Owner: postgres
@@ -2211,6 +2395,12 @@ ALTER TABLE public.dotptdoanvien ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.duytricsdl ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: gio_hoc_tap; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.gio_hoc_tap ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: github_settings; Type: ROW SECURITY; Schema: public; Owner: postgres
@@ -2309,7 +2499,19 @@ ALTER TABLE public.tieuchitd ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: xet_thidua; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.xet_thidua ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: SCHEMA public; Type: ACL; Schema: -; Owner: pg_database_owner
+--
+
+
+
+--
+-- Name: FUNCTION get_secure_role(); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -2388,6 +2590,12 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: TABLE duytricsdl; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: TABLE gio_hoc_tap; Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -2534,7 +2742,7 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict DPfTeyKBYp5qPg5QEmdDMt7EUaIXCFGezqhFRIC7SwqxxS5ubPg3UkfBYksSaAQ
+\unrestrict aAIlGG4JCTVeALkabrGt515c7EfEl66RfmuSHX2Z4oYBMA2nrilF9WShSp8Q9Bt
 
 
 -- 1. Khởi tạo tài khoản quản trị
