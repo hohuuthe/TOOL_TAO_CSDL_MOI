@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict aAIlGG4JCTVeALkabrGt515c7EfEl66RfmuSHX2Z4oYBMA2nrilF9WShSp8Q9Bt
+\restrict JtFLfKI9ank2p5C35zfyyiflMr5frRvTJR5d9ZUcsIOEoaH4SvcRPbRtFX8ydRa
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -34,16 +34,61 @@ COMMENT ON SCHEMA public IS 'standard public schema';
 
 
 --
+-- Name: get_auth_chidoan_id(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_auth_chidoan_id() RETURNS uuid
+    LANGUAGE sql STABLE SECURITY DEFINER
+    AS $$
+  SELECT chidoan_id FROM public.taikhoan 
+  WHERE lower(username) = lower(split_part(auth.email(), '@', 1)) 
+  LIMIT 1; 
+$$;
+
+
+ALTER FUNCTION public.get_auth_chidoan_id() OWNER TO postgres;
+
+--
+-- Name: get_auth_doanvien_id(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_auth_doanvien_id() RETURNS uuid
+    LANGUAGE sql STABLE SECURITY DEFINER
+    AS $$
+  SELECT doanvien_id FROM public.taikhoan 
+  WHERE lower(username) = lower(split_part(auth.email(), '@', 1)) 
+  LIMIT 1; 
+$$;
+
+
+ALTER FUNCTION public.get_auth_doanvien_id() OWNER TO postgres;
+
+--
+-- Name: get_auth_role(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_auth_role() RETURNS text
+    LANGUAGE sql STABLE SECURITY DEFINER
+    AS $$
+  SELECT role FROM public.taikhoan 
+  WHERE lower(username) = lower(split_part(auth.email(), '@', 1)) 
+  LIMIT 1; 
+$$;
+
+
+ALTER FUNCTION public.get_auth_role() OWNER TO postgres;
+
+--
 -- Name: get_secure_role(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.get_secure_role() RETURNS text
-    LANGUAGE sql SECURITY DEFINER
+    LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'public'
     AS $$
-  SELECT role FROM public.taikhoan
-  WHERE username = split_part(auth.email(), '@', 1)
-  LIMIT 1;
+  SELECT role FROM public.taikhoan 
+  WHERE lower(username) = lower(split_part(auth.email(), '@', 1)) 
+  LIMIT 1; 
 $$;
 
 
@@ -965,20 +1010,20 @@ ALTER TABLE public.thongbao_hethong OWNER TO postgres;
 
 CREATE TABLE public.thongbao_riengbiet (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    namhoc_id uuid NOT NULL,
-    sender_id uuid NOT NULL,
+    namhoc_id text NOT NULL,
+    sender_id text NOT NULL,
     sender_name text NOT NULL,
     sender_role text NOT NULL,
     title text NOT NULL,
     content text NOT NULL,
     attachments jsonb DEFAULT '[]'::jsonb,
-    target_roles jsonb DEFAULT '[]'::jsonb,
-    target_chidoan_ids jsonb DEFAULT '[]'::jsonb,
-    start_at timestamp with time zone DEFAULT now(),
+    target_roles text[] DEFAULT '{}'::text[],
+    target_chidoan_ids text[] DEFAULT '{}'::text[],
+    start_at timestamp with time zone NOT NULL,
     end_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    read_by jsonb DEFAULT '[]'::jsonb
+    created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+    read_by text[] DEFAULT '{}'::text[]
 );
 
 
@@ -1598,27 +1643,6 @@ CREATE INDEX idx_theodoi360_namhoc_tuan ON public.theodoi360 USING btree (nam_ho
 
 
 --
--- Name: idx_thongbao_riengbiet_dates; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_thongbao_riengbiet_dates ON public.thongbao_riengbiet USING btree (start_at, end_at);
-
-
---
--- Name: idx_thongbao_riengbiet_namhoc; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_thongbao_riengbiet_namhoc ON public.thongbao_riengbiet USING btree (namhoc_id);
-
-
---
--- Name: idx_thongbao_riengbiet_sender; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_thongbao_riengbiet_sender ON public.thongbao_riengbiet USING btree (sender_id);
-
-
---
 -- Name: idx_tieuchitd_context; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -1972,22 +1996,6 @@ ALTER TABLE ONLY public.settings
 
 
 --
--- Name: thongbao_riengbiet fk_thongbao_riengbiet_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.thongbao_riengbiet
-    ADD CONSTRAINT fk_thongbao_riengbiet_namhoc FOREIGN KEY (namhoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
-
-
---
--- Name: thongbao_riengbiet fk_thongbao_riengbiet_taikhoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.thongbao_riengbiet
-    ADD CONSTRAINT fk_thongbao_riengbiet_taikhoan FOREIGN KEY (sender_id) REFERENCES public.taikhoan(id) ON DELETE CASCADE;
-
-
---
 -- Name: tieuchitd fk_tieuchitd_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -2092,272 +2100,297 @@ ALTER TABLE ONLY public.xet_thidua
 
 
 --
--- Name: push_subscriptions Admin được lấy danh sách gửi; Type: POLICY; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin được lấy danh sách gửi" ON public.push_subscriptions FOR SELECT TO authenticated USING ((public.get_secure_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text])));
+CREATE POLICY "Admin và BTV có full quyền" ON public.cauhinh_tieuchi_xet_thidua TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
 
 
 --
--- Name: activity_logs Admins can view all activity logs; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admins can view all activity logs" ON public.activity_logs FOR SELECT TO authenticated USING ((EXISTS ( SELECT 1
-   FROM public.taikhoan
-  WHERE ((taikhoan.id = auth.uid()) AND (taikhoan.role = 'Admin'::text)))));
+CREATE POLICY "Admin và BTV có full quyền" ON public.doanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: ql_baocao Allow full access for authenticated users; Type: POLICY; Schema: public; Owner: postgres
+-- Name: dotptdoanvien Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Allow full access for authenticated users" ON public.ql_baocao TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Admin và BTV có full quyền" ON public.dotptdoanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: ql_nop_bc Allow full access for authenticated users on ql_nop_bc; Type: POLICY; Schema: public; Owner: postgres
+-- Name: namhoc Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Allow full access for authenticated users on ql_nop_bc" ON public.ql_nop_bc TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Admin và BTV có full quyền" ON public.namhoc TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: activity_logs Authenticated users can insert activity logs; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phancong Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Authenticated users can insert activity logs" ON public.activity_logs FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Admin và BTV có full quyền" ON public.phancong TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: dotptdoanvien Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ql_baocao Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Authenticated users only" ON public.dotptdoanvien TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
+CREATE POLICY "Admin và BTV có full quyền" ON public.ql_baocao TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: phancong Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
+-- Name: qlchidoan Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Authenticated users only" ON public.phancong TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
+CREATE POLICY "Admin và BTV có full quyền" ON public.qlchidoan TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: ptdoanvien Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tieuchitd Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Authenticated users only" ON public.ptdoanvien TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
+CREATE POLICY "Admin và BTV có full quyền" ON public.tieuchitd TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: tieuchitd Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tuanhoc Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Authenticated users only" ON public.tieuchitd TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
+CREATE POLICY "Admin và BTV có full quyền" ON public.tuanhoc TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: tuanhoc Authenticated users only; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_hethong Admin, BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Authenticated users only" ON public.tuanhoc TO authenticated USING ((auth.role() = 'authenticated'::text)) WITH CHECK ((auth.role() = 'authenticated'::text));
+CREATE POLICY "Admin, BTV có full quyền" ON public.thongbao_hethong TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: thongbao_riengbiet Cho phép Admin và các quản trị viên quản lý thông b; Type: POLICY; Schema: public; Owner: postgres
+-- Name: xet_thidua Admin, BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép Admin và các quản trị viên quản lý thông b" ON public.thongbao_riengbiet TO authenticated USING ((EXISTS ( SELECT 1
-   FROM public.taikhoan
-  WHERE ((taikhoan.id = auth.uid()) AND (taikhoan.role = ANY (ARRAY['Admin'::text, 'BGH'::text, 'BTV'::text, 'GVCN'::text]))))));
+CREATE POLICY "Admin, BTV có full quyền" ON public.xet_thidua TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
 
 
 --
--- Name: thongbao_hethong Cho phép INSERT thongbao_hethong; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ptdoanvien Admin, BTV, BCH có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép INSERT thongbao_hethong" ON public.thongbao_hethong FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Admin, BTV, BCH có full quyền" ON public.ptdoanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text])));
 
 
 --
--- Name: thongbao_hethong Cho phép SELECT thongbao_hethong; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet Admin, BTV, BGH, GVCN có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép SELECT thongbao_hethong" ON public.thongbao_hethong FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Admin, BTV, BGH, GVCN có full quyền" ON public.thongbao_riengbiet TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BGH'::text, 'GVCN'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BGH'::text, 'GVCN'::text])));
 
 
 --
--- Name: thongbao_hethong Cho phép UPDATE thongbao_hethong; Type: POLICY; Schema: public; Owner: postgres
+-- Name: chamdiem Admin, BTV, NC có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép UPDATE thongbao_hethong" ON public.thongbao_hethong FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Admin, BTV, NC có full quyền" ON public.chamdiem TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'NC'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'NC'::text])));
 
 
 --
--- Name: duytricsdl Cho phép cập nhật dữ liệu công khai; Type: POLICY; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap Admin, BTV, NC có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép cập nhật dữ liệu công khai" ON public.duytricsdl FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "Admin, BTV, NC có full quyền" ON public.gio_hoc_tap TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'NC'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'NC'::text])));
 
 
 --
--- Name: namhoc Cho phép người dùng xác thực có toàn quyền bảng n; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien BCH chỉ được phép sửa; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép người dùng xác thực có toàn quyền bảng n" ON public.namhoc TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "BCH chỉ được phép sửa" ON public.doanvien FOR UPDATE TO authenticated USING ((public.get_auth_role() = 'BCH'::text)) WITH CHECK ((public.get_auth_role() = 'BCH'::text));
 
 
 --
--- Name: cauhinh_tieuchi_xet_thidua Cho phép người dùng đã đăng nhập cập nhật cauhin; Type: POLICY; Schema: public; Owner: postgres
+-- Name: qlchidoan BCH chỉ được phép sửa; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép người dùng đã đăng nhập cập nhật cauhin" ON public.cauhinh_tieuchi_xet_thidua TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "BCH chỉ được phép sửa" ON public.qlchidoan FOR UPDATE TO authenticated USING ((public.get_auth_role() = 'BCH'::text)) WITH CHECK ((public.get_auth_role() = 'BCH'::text));
 
 
 --
--- Name: gio_hoc_tap Cho phép người dùng đã đăng nhập cập nhật gio_ho; Type: POLICY; Schema: public; Owner: postgres
+-- Name: duytricsdl Cho phép mọi người cập nhật duytricsdl; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép người dùng đã đăng nhập cập nhật gio_ho" ON public.gio_hoc_tap TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Cho phép mọi người cập nhật duytricsdl" ON public.duytricsdl FOR UPDATE USING (true) WITH CHECK (true);
 
 
 --
--- Name: xet_thidua Cho phép người dùng đã đăng nhập cập nhật xet_th; Type: POLICY; Schema: public; Owner: postgres
+-- Name: duytricsdl Cho phép mọi người xem duytricsdl; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép người dùng đã đăng nhập cập nhật xet_th" ON public.xet_thidua TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Cho phép mọi người xem duytricsdl" ON public.duytricsdl FOR SELECT USING (true);
 
 
 --
--- Name: chamdiem Cho phép thao tác chamdiem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: github_settings Chỉ Admin được sửa; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép thao tác chamdiem" ON public.chamdiem TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Chỉ Admin được sửa" ON public.github_settings TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
 
 
 --
--- Name: doanvien Cho phép thao tác doanvien; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phanquyen Chỉ Admin được sửa; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép thao tác doanvien" ON public.doanvien TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Chỉ Admin được sửa" ON public.phanquyen TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
 
 
 --
--- Name: qlchidoan Cho phép thao tác qlchidoan; Type: POLICY; Schema: public; Owner: postgres
+-- Name: settings Chỉ Admin được sửa; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép thao tác qlchidoan" ON public.qlchidoan TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Chỉ Admin được sửa" ON public.settings TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
 
 
 --
--- Name: theodoi360 Cho phép thao tác theodoi360 khi đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+-- Name: taikhoan Chỉ Admin được sửa tài khoản; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép thao tác theodoi360 khi đăng nhập" ON public.theodoi360 TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Chỉ Admin được sửa tài khoản" ON public.taikhoan TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
 
 
 --
--- Name: thongbao_riengbiet Cho phép tất cả tài khoản xem thông báo; Type: POLICY; Schema: public; Owner: postgres
+-- Name: github_settings Mọi người có thể xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép tất cả tài khoản xem thông báo" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi người có thể xem" ON public.github_settings FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: namhoc Cho phép đọc công khai bảng namhoc; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phanquyen Mọi người có thể xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép đọc công khai bảng namhoc" ON public.namhoc FOR SELECT USING (true);
+CREATE POLICY "Mọi người có thể xem" ON public.phanquyen FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: duytricsdl Cho phép đọc dữ liệu công khai; Type: POLICY; Schema: public; Owner: postgres
+-- Name: settings Mọi người có thể xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép đọc dữ liệu công khai" ON public.duytricsdl FOR SELECT USING (true);
+CREATE POLICY "Mọi người có thể xem" ON public.settings FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: phanquyen Cho phép đọc phanquyen; Type: POLICY; Schema: public; Owner: postgres
+-- Name: taikhoan Mọi người có thể xem tài khoản; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép đọc phanquyen" ON public.phanquyen FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi người có thể xem tài khoản" ON public.taikhoan FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: settings Cho phép đọc settings; Type: POLICY; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép đọc settings" ON public.settings FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.cauhinh_tieuchi_xet_thidua FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: taikhoan Cho phép đọc taikhoan; Type: POLICY; Schema: public; Owner: postgres
+-- Name: chamdiem Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép đọc taikhoan" ON public.taikhoan FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.chamdiem FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: thongbao_hethong Chỉ Admin được DELETE thongbao_hethong; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Chỉ Admin được DELETE thongbao_hethong" ON public.thongbao_hethong FOR DELETE TO authenticated USING ((public.get_secure_role() = 'Admin'::text));
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.doanvien FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: github_settings Chỉ Admin được sửa github_settings; Type: POLICY; Schema: public; Owner: postgres
+-- Name: dotptdoanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Chỉ Admin được sửa github_settings" ON public.github_settings TO authenticated USING ((public.get_secure_role() = 'Admin'::text)) WITH CHECK ((public.get_secure_role() = 'Admin'::text));
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.dotptdoanvien FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: phanquyen Chỉ Admin được sửa phanquyen; Type: POLICY; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Chỉ Admin được sửa phanquyen" ON public.phanquyen TO authenticated USING ((public.get_secure_role() = 'Admin'::text)) WITH CHECK ((public.get_secure_role() = 'Admin'::text));
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.gio_hoc_tap FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: settings Chỉ Admin được sửa settings; Type: POLICY; Schema: public; Owner: postgres
+-- Name: namhoc Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Chỉ Admin được sửa settings" ON public.settings TO authenticated USING ((public.get_secure_role() = 'Admin'::text)) WITH CHECK ((public.get_secure_role() = 'Admin'::text));
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.namhoc FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: duytricsdl Chỉ cho phép thêm khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phancong Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Chỉ cho phép thêm khi đã đăng nhập" ON public.duytricsdl FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.phancong FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: duytricsdl Chỉ cho phép xóa khi đã đăng nhập; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ptdoanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Chỉ cho phép xóa khi đã đăng nhập" ON public.duytricsdl FOR DELETE TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.ptdoanvien FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: taikhoan Chỉ quản trị được sửa taikhoan; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ql_baocao Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Chỉ quản trị được sửa taikhoan" ON public.taikhoan TO authenticated USING ((public.get_secure_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text, 'BGH'::text]))) WITH CHECK ((public.get_secure_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text, 'BGH'::text])));
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.ql_baocao FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: push_subscriptions Người dùng quản lý thiết bị của mình; Type: POLICY; Schema: public; Owner: postgres
+-- Name: qlchidoan Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Người dùng quản lý thiết bị của mình" ON public.push_subscriptions TO authenticated USING ((user_id = ( SELECT taikhoan.id
-   FROM public.taikhoan
-  WHERE (taikhoan.username = split_part(auth.email(), '@'::text, 1))
- LIMIT 1))) WITH CHECK ((user_id = ( SELECT taikhoan.id
-   FROM public.taikhoan
-  WHERE (taikhoan.username = split_part(auth.email(), '@'::text, 1))
- LIMIT 1)));
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.qlchidoan FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: thongbao_hethong Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.thongbao_hethong FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: thongbao_riengbiet Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: tieuchitd Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.tieuchitd FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: tuanhoc Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.tuanhoc FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: xet_thidua Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.xet_thidua FOR SELECT TO authenticated USING (true);
 
 
 --
@@ -2505,7 +2538,60 @@ ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.xet_thidua ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: activity_logs Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.activity_logs TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: duytricsdl Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.duytricsdl TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: push_subscriptions Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.push_subscriptions TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: ql_nop_bc Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.ql_nop_bc TO authenticated USING (true) WITH CHECK (true);
+
+
+--
+-- Name: theodoi360 Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360 TO authenticated USING (true) WITH CHECK (true);
+
+
+--
 -- Name: SCHEMA public; Type: ACL; Schema: -; Owner: pg_database_owner
+--
+
+
+
+--
+-- Name: FUNCTION get_auth_chidoan_id(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION get_auth_doanvien_id(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION get_auth_role(); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -2742,7 +2828,7 @@ ALTER TABLE public.xet_thidua ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict aAIlGG4JCTVeALkabrGt515c7EfEl66RfmuSHX2Z4oYBMA2nrilF9WShSp8Q9Bt
+\unrestrict JtFLfKI9ank2p5C35zfyyiflMr5frRvTJR5d9ZUcsIOEoaH4SvcRPbRtFX8ydRa
 
 
 -- 1. Khởi tạo tài khoản quản trị
