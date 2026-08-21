@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict 3LbclDzJq1por8Vhsi3MnqTWPuGBWZwfdGSGULHJbIUX5lsomBql1mPLYRsw7De
+\restrict jlhqOj4zvCD3rcZ7uVM2Mf48l5c9uaZjbK9WXhOSbqAlStJPhsx5v6fXEZMcakQ
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -32,6 +32,23 @@ SET row_security = off;
 
 COMMENT ON SCHEMA public IS 'standard public schema';
 
+
+--
+-- Name: check_user_mfa_status(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.check_user_mfa_status() RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'public', 'auth'
+    AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM auth.mfa_factors 
+    WHERE user_id = auth.uid() AND status = 'verified'
+  );
+$$;
+
+
+ALTER FUNCTION public.check_user_mfa_status() OWNER TO postgres;
 
 --
 -- Name: fn_dong_bo_taikhoan_sang_auth_users(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -492,8 +509,9 @@ ALTER FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() OWNER TO postgres;
 CREATE FUNCTION public.get_auth_chidoan_id() RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
     AS $$
-  SELECT chidoan_id FROM public.taikhoan 
-  WHERE lower(username) = lower(split_part(auth.email(), '@', 1)) 
+  SELECT chidoan_id 
+  FROM public.taikhoan 
+  WHERE lower(username) = lower(split_part(coalesce(auth.email(), ''), '@', 1))
   LIMIT 1; 
 $$;
 
@@ -507,8 +525,9 @@ ALTER FUNCTION public.get_auth_chidoan_id() OWNER TO postgres;
 CREATE FUNCTION public.get_auth_doanvien_id() RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
     AS $$
-  SELECT doanvien_id FROM public.taikhoan 
-  WHERE lower(username) = lower(split_part(auth.email(), '@', 1)) 
+  SELECT doanvien_id 
+  FROM public.taikhoan 
+  WHERE lower(username) = lower(split_part(coalesce(auth.email(), ''), '@', 1))
   LIMIT 1; 
 $$;
 
@@ -520,43 +539,35 @@ ALTER FUNCTION public.get_auth_doanvien_id() OWNER TO postgres;
 --
 
 CREATE FUNCTION public.get_auth_role() RETURNS text
-    LANGUAGE plpgsql STABLE SECURITY DEFINER
+    LANGUAGE sql STABLE SECURITY DEFINER
     AS $$
-DECLARE
-  v_role text;
-BEGIN
-  IF auth.uid() IS NULL THEN
-    RETURN NULL;
-  END IF;
-
-  -- 1. Tìm theo auth.uid() trong bảng taikhoan
-  SELECT role INTO v_role
-  FROM public.taikhoan
-  WHERE id = auth.uid()
-  LIMIT 1;
-
-  -- 2. Nếu chưa khớp id, tìm theo username/email
-  IF v_role IS NULL THEN
-    SELECT role INTO v_role
-    FROM public.taikhoan
-    WHERE lower(username) = lower(split_part(coalesce(auth.email(), ''), '@', 1))
-       OR lower(username) = lower(coalesce(auth.jwt() ->> 'preferred_username', ''))
-       OR lower(username) = lower(coalesce(auth.jwt() -> 'user_metadata' ->> 'username', ''))
-    LIMIT 1;
-  END IF;
-
-  -- 3. Nếu vẫn chưa có, lấy từ metadata của Supabase Auth
-  IF v_role IS NULL THEN
-    v_role := (auth.jwt() -> 'user_metadata' ->> 'role');
-  END IF;
-
-  -- Luôn chuyển đổi về chữ thường để so sánh an toàn tuyệt đối
-  RETURN lower(coalesce(v_role, 'guest'));
-END;
+  SELECT upper(trim(role)) 
+  FROM public.taikhoan 
+  WHERE lower(username) = lower(split_part(coalesce(auth.email(), ''), '@', 1))
+  LIMIT 1; 
 $$;
 
 
 ALTER FUNCTION public.get_auth_role() OWNER TO postgres;
+
+--
+-- Name: get_my_role(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_my_role() RETURNS text
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+  SELECT UPPER(TRIM(role)) 
+  FROM public.taikhoan 
+  WHERE id = auth.uid() 
+     OR lower(username) = split_part(lower(auth.email()), '@', 1)
+     OR lower(username || '@htqltd.vn') = lower(auth.email())
+  LIMIT 1;
+$$;
+
+
+ALTER FUNCTION public.get_my_role() OWNER TO postgres;
 
 --
 -- Name: get_secure_chidoan_id(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -658,6 +669,104 @@ $$;
 
 
 ALTER FUNCTION public.handle_update_likes_count() OWNER TO postgres;
+
+--
+-- Name: rpc_admin_reset_user_mfa(text, text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.rpc_admin_reset_user_mfa(p_user_id text DEFAULT NULL::text, p_username text DEFAULT NULL::text) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'auth', 'extensions'
+    AS $$
+DECLARE
+  v_clean_username text;
+  v_clean_user_id text;
+  v_user_uuid uuid;
+  v_caller_role text;
+  v_target_user_id uuid;
+BEGIN
+  -- KIỂM TRA BẢO MẬT: Chỉ cho phép tự sửa hoặc Admin sửa
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: Phải đăng nhập để sử dụng chức năng này.';
+  END IF;
+
+  v_clean_username := lower(trim(COALESCE(p_username, '')));
+  v_clean_user_id := trim(COALESCE(p_user_id, ''));
+
+  IF v_clean_user_id <> '' THEN
+    BEGIN
+      v_user_uuid := v_clean_user_id::uuid;
+    EXCEPTION WHEN OTHERS THEN
+      v_user_uuid := NULL;
+    END;
+  END IF;
+
+  -- Tìm target_user_id nếu chỉ truyền username
+  IF v_user_uuid IS NULL AND v_clean_username <> '' THEN
+    SELECT id INTO v_user_uuid FROM auth.users WHERE lower(email) = v_clean_username OR lower(email) = v_clean_username || '@htqltd.vn' LIMIT 1;
+    IF v_user_uuid IS NULL THEN
+      SELECT id INTO v_user_uuid FROM public.taikhoan WHERE lower(username) = v_clean_username LIMIT 1;
+    END IF;
+  END IF;
+
+  SELECT role INTO v_caller_role FROM public.taikhoan WHERE id = auth.uid();
+  IF (v_user_uuid IS NOT NULL AND auth.uid() <> v_user_uuid) AND COALESCE(v_caller_role, '') <> 'Admin' AND COALESCE(v_caller_role, '') <> 'ADMIN' THEN
+    RAISE EXCEPTION 'Forbidden: Không có quyền thao tác trên tài khoản khác.';
+  END IF;
+
+  -- 1. Xóa mfa_challenges liên quan trong auth.mfa_challenges
+  DELETE FROM auth.mfa_challenges 
+  WHERE factor_id IN (
+    SELECT id FROM auth.mfa_factors 
+    WHERE user_id IN (
+      SELECT id FROM auth.users
+      WHERE (v_user_uuid IS NOT NULL AND id = v_user_uuid)
+         OR (v_clean_username <> '' AND lower(email) = v_clean_username)
+         OR (v_clean_username <> '' AND lower(email) = v_clean_username || '@htqltd.vn')
+         OR (v_clean_username <> '' AND lower(email) LIKE v_clean_username || '@%')
+         OR (v_clean_username <> '' AND lower(COALESCE(raw_user_meta_data->>'username', '')) = v_clean_username)
+         OR (v_clean_username <> '' AND lower(COALESCE(raw_user_meta_data->>'user_name', '')) = v_clean_username)
+         OR (v_clean_username <> '' AND lower(COALESCE(user_metadata->>'username', '')) = v_clean_username)
+         OR (id IN (
+           SELECT id FROM public.taikhoan 
+           WHERE (v_clean_user_id <> '' AND id = v_clean_user_id)
+              OR (v_clean_username <> '' AND lower(username) = v_clean_username)
+         ))
+    )
+  );
+
+  -- 2. Xóa tất cả mfa_factors liên quan trong auth.mfa_factors
+  DELETE FROM auth.mfa_factors 
+  WHERE user_id IN (
+    SELECT id FROM auth.users
+    WHERE (v_user_uuid IS NOT NULL AND id = v_user_uuid)
+       OR (v_clean_username <> '' AND lower(email) = v_clean_username)
+       OR (v_clean_username <> '' AND lower(email) = v_clean_username || '@htqltd.vn')
+       OR (v_clean_username <> '' AND lower(email) LIKE v_clean_username || '@%')
+       OR (v_clean_username <> '' AND lower(COALESCE(raw_user_meta_data->>'username', '')) = v_clean_username)
+       OR (v_clean_username <> '' AND lower(COALESCE(raw_user_meta_data->>'user_name', '')) = v_clean_username)
+       OR (v_clean_username <> '' AND lower(COALESCE(user_metadata->>'username', '')) = v_clean_username)
+       OR (id IN (
+         SELECT id FROM public.taikhoan 
+         WHERE (v_clean_user_id <> '' AND id = v_clean_user_id)
+            OR (v_clean_username <> '' AND lower(username) = v_clean_username)
+       ))
+  );
+
+  -- 3. Xóa cờ 2FA và mã khôi phục trong bảng public.taikhoan (Vượt rào RLS 100%)
+  UPDATE public.taikhoan 
+  SET chidoan1111 = NULL,
+      fullname = CASE WHEN fullname LIKE '%::2FA:%' THEN split_part(fullname, '::2FA:', 1) ELSE fullname END,
+      updatedat = NOW()
+  WHERE (v_clean_user_id <> '' AND id = v_clean_user_id)
+     OR (v_clean_username <> '' AND lower(username) = v_clean_username)
+     OR (v_clean_user_id <> '' AND id IN (SELECT id FROM auth.users WHERE id = v_user_uuid));
+
+END;
+$$;
+
+
+ALTER FUNCTION public.rpc_admin_reset_user_mfa(p_user_id text, p_username text) OWNER TO postgres;
 
 --
 -- Name: rpc_authenticate_user(text, text); Type: FUNCTION; Schema: public; Owner: postgres
@@ -2099,6 +2208,14 @@ ALTER TABLE ONLY public.phanquyen
 
 
 --
+-- Name: phanquyen phanquyen_doituong_tab_namhoc_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.phanquyen
+    ADD CONSTRAINT phanquyen_doituong_tab_namhoc_unique UNIQUE (doi_tuong, tab_chuc_nang, nam_hoc);
+
+
+--
 -- Name: phanquyen phanquyen_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -3056,325 +3173,192 @@ ALTER TABLE ONLY public.xet_thidua
 
 
 --
--- Name: vanban_doan Admin có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: duytricsdl ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin có full quyền" ON public.vanban_doan TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text])));
+CREATE POLICY "ADMIN full quyền" ON public.duytricsdl TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: taikhoan Admin toàn quyền quản trị bảng taikhoan; Type: POLICY; Schema: public; Owner: postgres
+-- Name: github_settings ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin toàn quyền quản trị bảng taikhoan" ON public.taikhoan TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['admin'::text, 'btv'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['admin'::text, 'btv'::text])));
+CREATE POLICY "ADMIN full quyền" ON public.github_settings TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: cauhinh_tieuchi_xet_thidua Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: namhoc ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.cauhinh_tieuchi_xet_thidua TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
+CREATE POLICY "ADMIN full quyền" ON public.namhoc TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: doanvien Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phanquyen ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.doanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN full quyền" ON public.phanquyen TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: dotptdoanvien Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: settings ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.dotptdoanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN full quyền" ON public.settings TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: namhoc Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: taikhoan ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.namhoc TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN full quyền" ON public.taikhoan TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: phancong Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: vanban_doan ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.phancong TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN full quyền" ON public.vanban_doan TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: ql_baocao Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phancong ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.ql_baocao TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN, BTV full quyền" ON public.phancong TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: qlchidoan Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_hethong ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.qlchidoan TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN, BTV full quyền" ON public.thongbao_hethong TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: tieuchitd Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tieuchitd ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.tieuchitd TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN, BTV full quyền" ON public.tieuchitd TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: tuanhoc Admin và BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tuanhoc ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin và BTV có full quyền" ON public.tuanhoc TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN, BTV full quyền" ON public.tuanhoc TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: thongbao_hethong Admin, BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: xet_thidua ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin, BTV có full quyền" ON public.thongbao_hethong TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN, BTV full quyền" ON public.xet_thidua TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: xet_thidua Admin, BTV có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ptdoanvien ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin, BTV có full quyền" ON public.xet_thidua TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text])));
+CREATE POLICY "ADMIN, BTV, BCH full quyền" ON public.ptdoanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text])));
 
 
 --
--- Name: ptdoanvien Admin, BTV, BCH có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ql_baocao ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin, BTV, BCH có full quyền" ON public.ptdoanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BCH'::text])));
+CREATE POLICY "ADMIN, BTV, BCH full quyền" ON public.ql_baocao TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: thongbao_riengbiet Admin, BTV, BGH, GVCN có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: qlchidoan ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin, BTV, BGH, GVCN có full quyền" ON public.thongbao_riengbiet TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BGH'::text, 'GVCN'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'BGH'::text, 'GVCN'::text])));
+CREATE POLICY "ADMIN, BTV, BCH full quyền" ON public.qlchidoan TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text])));
 
 
 --
--- Name: chamdiem Admin, BTV, NC có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: theodoi360 ADMIN, BTV, BCH, NC, DV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin, BTV, NC có full quyền" ON public.chamdiem TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'NC'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'NC'::text])));
+CREATE POLICY "ADMIN, BTV, BCH, NC, DV full quyền" ON public.theodoi360 TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'DV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'DV'::text])));
 
 
 --
--- Name: gio_hoc_tap Admin, BTV, NC có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ql_nop_bc ADMIN, BTV, BCH, NC, GVCN, DV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Admin, BTV, NC có full quyền" ON public.gio_hoc_tap TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'NC'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text, 'BTV'::text, 'NC'::text])));
+CREATE POLICY "ADMIN, BTV, BCH, NC, GVCN, DV full quyền" ON public.ql_nop_bc TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text])));
 
 
 --
--- Name: doanvien BCH chỉ được phép sửa; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet ADMIN, BTV, BGH, GVCN full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "BCH chỉ được phép sửa" ON public.doanvien FOR UPDATE TO authenticated USING ((public.get_auth_role() = 'BCH'::text)) WITH CHECK ((public.get_auth_role() = 'BCH'::text));
+CREATE POLICY "ADMIN, BTV, BGH, GVCN full quyền" ON public.thongbao_riengbiet TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BGH'::text, 'GVCN'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BGH'::text, 'GVCN'::text])));
 
 
 --
--- Name: qlchidoan BCH chỉ được phép sửa; Type: POLICY; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap ADMIN, BTV, NC full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "BCH chỉ được phép sửa" ON public.qlchidoan FOR UPDATE TO authenticated USING ((public.get_auth_role() = 'BCH'::text)) WITH CHECK ((public.get_auth_role() = 'BCH'::text));
+CREATE POLICY "ADMIN, BTV, NC full quyền" ON public.gio_hoc_tap TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'NC'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'NC'::text])));
 
 
 --
--- Name: duytricsdl Cho phép mọi người cập nhật duytricsdl; Type: POLICY; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép mọi người cập nhật duytricsdl" ON public.duytricsdl FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "Admin, BTV full quyền" ON public.cauhinh_tieuchi_xet_thidua TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: duytricsdl Cho phép mọi người xem duytricsdl; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép mọi người xem duytricsdl" ON public.duytricsdl FOR SELECT USING (true);
+CREATE POLICY "Admin, BTV full quyền" ON public.doanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: phanquyen Cho phép xem bảng phân quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: dotptdoanvien Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép xem bảng phân quyền" ON public.phanquyen FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Admin, BTV full quyền" ON public.dotptdoanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: qlchidoan Cho phép xem danh sách chi đoàn; Type: POLICY; Schema: public; Owner: postgres
+-- Name: chamdiem Admin, BTV, NC full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép xem danh sách chi đoàn" ON public.qlchidoan FOR SELECT USING (true);
+CREATE POLICY "Admin, BTV, NC full quyền" ON public.chamdiem TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'NC'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'NC'::text])));
 
 
 --
--- Name: namhoc Cho phép xem danh sách năm học; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien BCH có quyền cập nhật; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép xem danh sách năm học" ON public.namhoc FOR SELECT USING (true);
+CREATE POLICY "BCH có quyền cập nhật" ON public.doanvien FOR UPDATE TO authenticated USING ((public.get_auth_role() = 'BCH'::text)) WITH CHECK ((public.get_auth_role() = 'BCH'::text));
 
 
 --
--- Name: tuanhoc Cho phép xem danh sách tuần học; Type: POLICY; Schema: public; Owner: postgres
+-- Name: duytricsdl Công cộng được cập nhật; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép xem danh sách tuần học" ON public.tuanhoc FOR SELECT USING (true);
+CREATE POLICY "Công cộng được cập nhật" ON public.duytricsdl FOR UPDATE USING (true) WITH CHECK (true);
 
 
 --
--- Name: taikhoan Cho phép xem danh sách tài khoản; Type: POLICY; Schema: public; Owner: postgres
+-- Name: duytricsdl Công cộng được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Cho phép xem danh sách tài khoản" ON public.taikhoan FOR SELECT TO authenticated USING (((public.get_auth_role() = ANY (ARRAY['admin'::text, 'btv'::text, 'bgh'::text])) OR (id = auth.uid()) OR (lower(username) = lower(split_part(COALESCE(auth.email(), ''::text), '@'::text, 1)))));
+CREATE POLICY "Công cộng được xem" ON public.duytricsdl FOR SELECT USING (true);
 
 
 --
--- Name: github_settings Chỉ Admin được sửa; Type: POLICY; Schema: public; Owner: postgres
+-- Name: namhoc Khách vãng lai được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Chỉ Admin được sửa" ON public.github_settings TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
-
-
---
--- Name: phanquyen Chỉ Admin được sửa; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Chỉ Admin được sửa" ON public.phanquyen TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
-
-
---
--- Name: settings Chỉ Admin được sửa; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Chỉ Admin được sửa" ON public.settings TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
-
-
---
--- Name: cauhinh_tieuchi_xet_thidua Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.cauhinh_tieuchi_xet_thidua FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: chamdiem Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.chamdiem FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: doanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.doanvien FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: dotptdoanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.dotptdoanvien FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: gio_hoc_tap Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.gio_hoc_tap FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: github_settings Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.github_settings FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: phancong Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.phancong FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: ptdoanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.ptdoanvien FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: ql_baocao Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.ql_baocao FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: settings Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.settings FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: thongbao_hethong Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.thongbao_hethong FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: thongbao_riengbiet Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: tieuchitd Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.tieuchitd FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: vanban_doan Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.vanban_doan FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: xet_thidua Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.xet_thidua FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: taikhoan Zero-Trust: Sửa dữ liệu cá nhân; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Zero-Trust: Sửa dữ liệu cá nhân" ON public.taikhoan FOR UPDATE TO authenticated USING (((id = auth.uid()) AND ((NOT public.fn_is_mfa_enabled()) OR ((auth.jwt() ->> 'aal'::text) = 'aal2'::text)))) WITH CHECK ((id = auth.uid()));
-
-
---
--- Name: taikhoan Zero-Trust: Xem dữ liệu tài khoản; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Zero-Trust: Xem dữ liệu tài khoản" ON public.taikhoan FOR SELECT TO authenticated USING ((((id = auth.uid()) OR (upper(((auth.jwt() -> 'user_metadata'::text) ->> 'role'::text)) = 'ADMIN'::text)) AND ((NOT public.fn_is_mfa_enabled()) OR ((auth.jwt() ->> 'aal'::text) = 'aal2'::text))));
+CREATE POLICY "Khách vãng lai được xem" ON public.namhoc FOR SELECT TO anon USING (true);
 
 
 --
@@ -3528,42 +3512,174 @@ ALTER TABLE public.vanban_doan ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.xet_thidua ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: activity_logs Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.activity_logs TO authenticated USING ((public.get_auth_role() IS NOT NULL)) WITH CHECK ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: duytricsdl Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.duytricsdl TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Đăng nhập được xem" ON public.cauhinh_tieuchi_xet_thidua FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: push_subscriptions Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: chamdiem Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.push_subscriptions TO authenticated USING ((public.get_auth_role() IS NOT NULL)) WITH CHECK ((public.get_auth_role() IS NOT NULL));
-
-
---
--- Name: ql_nop_bc Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.ql_nop_bc TO authenticated USING ((public.get_auth_role() IS NOT NULL)) WITH CHECK ((public.get_auth_role() IS NOT NULL));
+CREATE POLICY "Đăng nhập được xem" ON public.chamdiem FOR SELECT TO authenticated USING (true);
 
 
 --
--- Name: theodoi360 Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360 TO authenticated USING ((public.get_auth_role() IS NOT NULL)) WITH CHECK ((public.get_auth_role() IS NOT NULL));
+CREATE POLICY "Đăng nhập được xem" ON public.doanvien FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: dotptdoanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.dotptdoanvien FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: gio_hoc_tap Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.gio_hoc_tap FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: github_settings Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.github_settings FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: namhoc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.namhoc FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: phancong Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.phancong FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: phanquyen Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.phanquyen FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: ptdoanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.ptdoanvien FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: push_subscriptions Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.push_subscriptions TO authenticated USING (true);
+
+
+--
+-- Name: ql_baocao Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.ql_baocao FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: ql_nop_bc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.ql_nop_bc FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: qlchidoan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.qlchidoan FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: settings Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.settings FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: taikhoan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.taikhoan FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: theodoi360 Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.theodoi360 FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: thongbao_hethong Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.thongbao_hethong FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: thongbao_riengbiet Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: tieuchitd Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.tieuchitd FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: tuanhoc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.tuanhoc FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: vanban_doan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.vanban_doan FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: xet_thidua Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO authenticated USING (true);
 
 
 --
 -- Name: SCHEMA public; Type: ACL; Schema: -; Owner: pg_database_owner
+--
+
+
+
+--
+-- Name: FUNCTION check_user_mfa_status(); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -3611,6 +3727,12 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 
 
 --
+-- Name: FUNCTION get_my_role(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: FUNCTION get_secure_chidoan_id(); Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -3642,6 +3764,12 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 
 --
 -- Name: FUNCTION handle_update_likes_count(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION rpc_admin_reset_user_mfa(p_user_id text, p_username text); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -3902,7 +4030,7 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 3LbclDzJq1por8Vhsi3MnqTWPuGBWZwfdGSGULHJbIUX5lsomBql1mPLYRsw7De
+\unrestrict jlhqOj4zvCD3rcZ7uVM2Mf48l5c9uaZjbK9WXhOSbqAlStJPhsx5v6fXEZMcakQ
 
 
 -- 1. Khởi tạo tài khoản quản trị
