@@ -1,0 +1,81 @@
+name: Tự động Nhân bản Cấu trúc Supabase moi 21.8
+
+on:
+  workflow_dispatch:
+
+jobs:
+  quy_trinh_nhan_ban:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Kiểm tra mã nguồn (Checkout)
+        uses: actions/checkout@v4
+
+      - name: Cài đặt PostgreSQL Client 17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Khởi tạo thư mục
+        run: mkdir -p supabase/migrations
+
+      - name: Lấy cấu trúc từ Dự án Gốc
+        env:
+          DB_URL: ${{ secrets.SOURCE_DB_URL }}
+        run: |
+          # 1. Trích xuất 100% cấu trúc của schema public (Bảng, Hàm, Trigger, RLS Policies)
+          /usr/lib/postgresql/17/bin/pg_dump "$DB_URL" --schema-only --schema=public > supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+          
+          # 2. Lọc bỏ các lệnh hệ thống gây lỗi permission trên Supabase để đảm bảo restore thành công 100%
+          sed -i '/^CREATE SCHEMA/d; /^ALTER SCHEMA/d; /^CREATE ROLE/d; /^ALTER ROLE/d; /^GRANT/d; /^REVOKE/d; /^CREATE EXTENSION/d; /^ALTER DEFAULT PRIVILEGES/d' supabase/migrations/20260510000000_khoi_tao_cau_truc.sql
+
+          # 3. Chèn thêm dữ liệu hạt giống (Seed Data)
+          cat >> supabase/migrations/20260510000000_khoi_tao_cau_truc.sql <<'EOF'
+
+          -- 1. Khởi tạo tài khoản quản trị
+          INSERT INTO public.taikhoan (username, password, fullname, role, chidoan_id)
+          VALUES (
+              'Admin', 
+              '$argon2id$v=19$m=65536,t=3,p=4$PUDXJllthdBNREj7Jd2KTw$blk3GJ2W6Jk/+OxXqPO9quBJtU9mjQqcHb6rYNmBxjM', 
+              'Quản trị', 
+              'Admin', 
+              NULL
+          ) ON CONFLICT (username) DO NOTHING;
+          
+          -- 2. Khởi tạo bảng duy trì CSDL
+          INSERT INTO public.duytricsdl (so) 
+          VALUES (1) 
+          ON CONFLICT DO NOTHING;
+          
+          -- 3. Khởi tạo cấu hình GitHub
+          INSERT INTO public.github_settings (
+              id, 
+              github_repo_path, 
+              github_branch, 
+              github_workflow_file, 
+              github_restore_workflow_file, 
+              github_token
+          )
+          VALUES (
+              'project_02',
+              'congty/du_an_backend',
+              'main',
+              'supabase-backup.yml',
+              'supabase-restore.yml',
+              'ghp_abc123...'
+          ) ON CONFLICT (id) DO NOTHING;
+          EOF
+
+      - name: Lưu trữ bản mẫu
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add supabase/
+          git commit -m "chore: cập nhật cấu trúc kèm cấu hình github ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git push
