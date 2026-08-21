@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict JtFLfKI9ank2p5C35zfyyiflMr5frRvTJR5d9ZUcsIOEoaH4SvcRPbRtFX8ydRa
+\restrict 3LbclDzJq1por8Vhsi3MnqTWPuGBWZwfdGSGULHJbIUX5lsomBql1mPLYRsw7De
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -32,6 +32,458 @@ SET row_security = off;
 
 COMMENT ON SCHEMA public IS 'standard public schema';
 
+
+--
+-- Name: fn_dong_bo_taikhoan_sang_auth_users(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'auth', 'extensions'
+    AS $_$
+DECLARE
+  v_old_email text;
+  v_new_email text;
+  v_safe_username text;
+  v_encrypted_pwd text;
+  v_user_id uuid;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_safe_username := lower(regexp_replace(COALESCE(OLD.username, ''), '[^a-zA-Z0-9_.-]', '', 'g'));
+    IF v_safe_username <> '' THEN
+      v_old_email := v_safe_username || '@htqltd.vn';
+      SELECT id INTO v_user_id FROM auth.users WHERE email = v_old_email LIMIT 1;
+      IF v_user_id IS NOT NULL THEN
+        DELETE FROM auth.identities WHERE user_id = v_user_id;
+        DELETE FROM auth.users WHERE id = v_user_id;
+      ELSE
+        DELETE FROM auth.users WHERE email = v_old_email;
+      END IF;
+    END IF;
+    RETURN OLD;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    v_safe_username := lower(regexp_replace(COALESCE(NEW.username, ''), '[^a-zA-Z0-9_.-]', '', 'g'));
+    IF v_safe_username = '' THEN
+      v_safe_username := 'user_' || substr(md5(random()::text), 1, 8);
+    END IF;
+    v_new_email := v_safe_username || '@htqltd.vn';
+
+    IF NEW.password ~ '^\$2[aby]\$' THEN
+      v_encrypted_pwd := NEW.password;
+    ELSIF NEW.password IS NOT NULL AND NEW.password <> '' THEN
+      v_encrypted_pwd := extensions.crypt(NEW.password, extensions.gen_salt('bf', 10));
+    ELSE
+      v_encrypted_pwd := extensions.crypt('DoanVien@123', extensions.gen_salt('bf', 10));
+    END IF;
+
+    SELECT id INTO v_user_id FROM auth.users WHERE email = v_new_email LIMIT 1;
+
+    IF v_user_id IS NULL THEN
+      v_user_id := gen_random_uuid();
+
+      INSERT INTO auth.users (
+        instance_id,
+        id,
+        aud,
+        role,
+        email,
+        encrypted_password,
+        email_confirmed_at,
+        raw_app_meta_data,
+        raw_user_meta_data,
+        created_at,
+        updated_at,
+        confirmation_token,
+        recovery_token,
+        email_change_token_new,
+        email_change,
+        phone_change,
+        phone_change_token,
+        email_change_token_current,
+        reauthentication_token,
+        is_sso_user,
+        is_anonymous
+      ) VALUES (
+        '00000000-0000-0000-0000-000000000000',
+        v_user_id,
+        'authenticated',
+        'authenticated',
+        v_new_email,
+        v_encrypted_pwd,
+        now(),
+        '{"provider":"email","providers":["email"]}'::jsonb,
+        json_build_object(
+          'username', NEW.username,
+          'fullname', COALESCE(NEW.fullname, NEW.username),
+          'role', COALESCE(NEW.role, 'DV'),
+          'chidoan_id', NEW.chidoan_id,
+          'doanvien_id', NEW.doanvien_id
+        )::jsonb,
+        now(),
+        now(),
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        false,
+        false
+      );
+
+      INSERT INTO auth.identities (
+        id,
+        user_id,
+        identity_data,
+        provider,
+        provider_id,
+        last_sign_in_at,
+        created_at,
+        updated_at
+      ) VALUES (
+        v_user_id,
+        v_user_id,
+        json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb,
+        'email',
+        v_new_email,
+        now(),
+        now(),
+        now()
+      )
+      ON CONFLICT DO NOTHING;
+    ELSE
+      UPDATE auth.users
+      SET
+        email = v_new_email,
+        encrypted_password = v_encrypted_pwd,
+        raw_user_meta_data = json_build_object(
+          'username', NEW.username,
+          'fullname', COALESCE(NEW.fullname, NEW.username),
+          'role', COALESCE(NEW.role, 'DV'),
+          'chidoan_id', NEW.chidoan_id,
+          'doanvien_id', NEW.doanvien_id
+        )::jsonb,
+        confirmation_token = COALESCE(confirmation_token, ''),
+        recovery_token = COALESCE(recovery_token, ''),
+        email_change_token_new = COALESCE(email_change_token_new, ''),
+        email_change = COALESCE(email_change, ''),
+        phone_change = COALESCE(phone_change, ''),
+        phone_change_token = COALESCE(phone_change_token, ''),
+        email_change_token_current = COALESCE(email_change_token_current, ''),
+        reauthentication_token = COALESCE(reauthentication_token, ''),
+        is_sso_user = COALESCE(is_sso_user, false),
+        is_anonymous = COALESCE(is_anonymous, false),
+        updated_at = now()
+      WHERE id = v_user_id;
+
+      INSERT INTO auth.identities (
+        id,
+        user_id,
+        identity_data,
+        provider,
+        provider_id,
+        last_sign_in_at,
+        created_at,
+        updated_at
+      ) VALUES (
+        v_user_id,
+        v_user_id,
+        json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb,
+        'email',
+        v_new_email,
+        now(),
+        now(),
+        now()
+      )
+      ON CONFLICT DO NOTHING;
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'UPDATE' THEN
+    v_old_email := lower(regexp_replace(COALESCE(OLD.username, ''), '[^a-zA-Z0-9_.-]', '', 'g')) || '@htqltd.vn';
+    v_safe_username := lower(regexp_replace(COALESCE(NEW.username, ''), '[^a-zA-Z0-9_.-]', '', 'g'));
+    IF v_safe_username = '' THEN
+      v_safe_username := 'user_' || substr(md5(random()::text), 1, 8);
+    END IF;
+    v_new_email := v_safe_username || '@htqltd.vn';
+
+    SELECT id INTO v_user_id FROM auth.users WHERE email = v_old_email OR email = v_new_email LIMIT 1;
+
+    IF NEW.password IS DISTINCT FROM OLD.password THEN
+      IF NEW.password ~ '^\$2[aby]\$' THEN
+        v_encrypted_pwd := NEW.password;
+      ELSIF NEW.password IS NOT NULL AND NEW.password <> '' THEN
+        v_encrypted_pwd := extensions.crypt(NEW.password, extensions.gen_salt('bf', 10));
+      ELSE
+        v_encrypted_pwd := extensions.crypt('DoanVien@123', extensions.gen_salt('bf', 10));
+      END IF;
+    END IF;
+
+    IF v_user_id IS NOT NULL THEN
+      UPDATE auth.users
+      SET
+        email = v_new_email,
+        encrypted_password = CASE 
+          WHEN v_encrypted_pwd IS NOT NULL THEN v_encrypted_pwd 
+          ELSE encrypted_password 
+        END,
+        raw_user_meta_data = json_build_object(
+          'username', NEW.username,
+          'fullname', COALESCE(NEW.fullname, NEW.username),
+          'role', COALESCE(NEW.role, 'DV'),
+          'chidoan_id', NEW.chidoan_id,
+          'doanvien_id', NEW.doanvien_id
+        )::jsonb,
+        confirmation_token = COALESCE(confirmation_token, ''),
+        recovery_token = COALESCE(recovery_token, ''),
+        email_change_token_new = COALESCE(email_change_token_new, ''),
+        email_change = COALESCE(email_change, ''),
+        phone_change = COALESCE(phone_change, ''),
+        phone_change_token = COALESCE(phone_change_token, ''),
+        email_change_token_current = COALESCE(email_change_token_current, ''),
+        reauthentication_token = COALESCE(reauthentication_token, ''),
+        is_sso_user = COALESCE(is_sso_user, false),
+        is_anonymous = COALESCE(is_anonymous, false),
+        updated_at = now()
+      WHERE id = v_user_id;
+
+      INSERT INTO auth.identities (
+        id,
+        user_id,
+        identity_data,
+        provider,
+        provider_id,
+        last_sign_in_at,
+        created_at,
+        updated_at
+      ) VALUES (
+        v_user_id,
+        v_user_id,
+        json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb,
+        'email',
+        v_new_email,
+        now(),
+        now(),
+        now()
+      )
+      ON CONFLICT DO NOTHING;
+    ELSE
+      v_user_id := gen_random_uuid();
+      IF v_encrypted_pwd IS NULL THEN
+        IF NEW.password ~ '^\$2[aby]\$' THEN
+          v_encrypted_pwd := NEW.password;
+        ELSIF NEW.password IS NOT NULL AND NEW.password <> '' THEN
+          v_encrypted_pwd := extensions.crypt(NEW.password, extensions.gen_salt('bf', 10));
+        ELSE
+          v_encrypted_pwd := extensions.crypt('DoanVien@123', extensions.gen_salt('bf', 10));
+        END IF;
+      END IF;
+
+      INSERT INTO auth.users (
+        instance_id,
+        id,
+        aud,
+        role,
+        email,
+        encrypted_password,
+        email_confirmed_at,
+        raw_app_meta_data,
+        raw_user_meta_data,
+        created_at,
+        updated_at,
+        confirmation_token,
+        recovery_token,
+        email_change_token_new,
+        email_change,
+        phone_change,
+        phone_change_token,
+        email_change_token_current,
+        reauthentication_token,
+        is_sso_user,
+        is_anonymous
+      ) VALUES (
+        '00000000-0000-0000-0000-000000000000',
+        v_user_id,
+        'authenticated',
+        'authenticated',
+        v_new_email,
+        v_encrypted_pwd,
+        now(),
+        '{"provider":"email","providers":["email"]}'::jsonb,
+        json_build_object(
+          'username', NEW.username,
+          'fullname', COALESCE(NEW.fullname, NEW.username),
+          'role', COALESCE(NEW.role, 'DV'),
+          'chidoan_id', NEW.chidoan_id,
+          'doanvien_id', NEW.doanvien_id
+        )::jsonb,
+        now(),
+        now(),
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        false,
+        false
+      );
+
+      INSERT INTO auth.identities (
+        id,
+        user_id,
+        identity_data,
+        provider,
+        provider_id,
+        last_sign_in_at,
+        created_at,
+        updated_at
+      ) VALUES (
+        v_user_id,
+        v_user_id,
+        json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb,
+        'email',
+        v_new_email,
+        now(),
+        now(),
+        now()
+      )
+      ON CONFLICT DO NOTHING;
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  RETURN NEW;
+END;
+$_$;
+
+
+ALTER FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users() OWNER TO postgres;
+
+--
+-- Name: fn_is_mfa_enabled(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_is_mfa_enabled() RETURNS boolean
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+  SELECT EXISTS (
+    SELECT 1 
+    FROM auth.mfa_factors 
+    WHERE user_id = auth.uid() 
+    AND status = 'verified'
+  );
+$$;
+
+
+ALTER FUNCTION public.fn_is_mfa_enabled() OWNER TO postgres;
+
+--
+-- Name: fn_kiem_tra_an_ninh_taikhoan(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_kiem_tra_an_ninh_taikhoan() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'auth'
+    AS $$
+DECLARE
+  v_current_auth_role text;
+  v_current_user_email text;
+  v_operator_role text;
+  v_target_role_upper text;
+  v_is_db_admin boolean;
+BEGIN
+  v_is_db_admin := (current_user IN ('postgres', 'service_role', 'supabase_admin'));
+  v_current_auth_role := COALESCE(auth.role(), 'anon');
+  v_current_user_email := COALESCE(auth.email(), '');
+
+  IF NOT v_is_db_admin AND v_current_auth_role = 'anon' THEN
+    RAISE EXCEPTION 'BAO MAT CANH BAO: Nghiem cam tao, sua doi hoac xoa tai khoan tu API ben ngoai!';
+  END IF;
+
+  IF NOT v_is_db_admin THEN
+    SELECT upper(trim(role)) INTO v_operator_role
+    FROM public.taikhoan
+    WHERE id = auth.uid() 
+       OR lower(regexp_replace(username, '[^a-zA-Z0-9_.-]', '', 'g')) || '@htqltd.vn' = lower(v_current_user_email)
+       OR lower(username) = split_part(lower(v_current_user_email), '@', 1)
+    LIMIT 1;
+  ELSE
+    v_operator_role := 'ADMIN';
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    IF lower(trim(OLD.username)) = 'admin' THEN
+      RAISE EXCEPTION 'BAO MAT: Nghiem cam xoa tai khoan Admin goc cua he thong!';
+    END IF;
+
+    IF NOT v_is_db_admin AND (v_operator_role IS NULL OR v_operator_role <> 'ADMIN') THEN
+      RAISE EXCEPTION 'BAO MAT: Ban khong co quyen xoa tai khoan!';
+    END IF;
+
+    RETURN OLD;
+  END IF;
+
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    v_target_role_upper := upper(trim(COALESCE(NEW.role, 'DV')));
+
+    IF TG_OP = 'UPDATE' AND lower(trim(OLD.username)) = 'admin' THEN
+      IF lower(trim(NEW.username)) <> 'admin' OR v_target_role_upper <> 'ADMIN' THEN
+        RAISE EXCEPTION 'BAO MAT: Khong duoc phep doi ten hoac ha quyen cua tai khoan Admin goc!';
+      END IF;
+    END IF;
+
+    IF v_target_role_upper IN ('ADMIN', 'BTV', 'BGH') THEN
+      IF TG_OP = 'UPDATE' AND upper(trim(COALESCE(OLD.role, ''))) = v_target_role_upper THEN
+        NULL;
+      ELSIF NOT v_is_db_admin AND (v_operator_role IS NULL OR v_operator_role <> 'ADMIN') THEN
+        RAISE EXCEPTION 'BAO MAT: Chi co Quan tri vien (Admin) moi co quyen cap quyen Quan tri (Admin/BTV/BGH)!';
+      END IF;
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.fn_kiem_tra_an_ninh_taikhoan() OWNER TO postgres;
+
+--
+-- Name: fn_tu_dong_bam_mat_khau_taikhoan(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $_$
+BEGIN
+  IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND NEW.password IS DISTINCT FROM OLD.password) THEN
+    IF NEW.password IS NULL OR trim(NEW.password) = '' THEN
+      NEW.password := extensions.crypt('DoanVien@123', extensions.gen_salt('bf', 10));
+    ELSIF NOT (NEW.password ~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$') THEN
+      NEW.password := extensions.crypt(NEW.password, extensions.gen_salt('bf', 10));
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$_$;
+
+
+ALTER FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() OWNER TO postgres;
 
 --
 -- Name: get_auth_chidoan_id(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -68,15 +520,69 @@ ALTER FUNCTION public.get_auth_doanvien_id() OWNER TO postgres;
 --
 
 CREATE FUNCTION public.get_auth_role() RETURNS text
-    LANGUAGE sql STABLE SECURITY DEFINER
+    LANGUAGE plpgsql STABLE SECURITY DEFINER
     AS $$
-  SELECT role FROM public.taikhoan 
-  WHERE lower(username) = lower(split_part(auth.email(), '@', 1)) 
-  LIMIT 1; 
+DECLARE
+  v_role text;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  -- 1. Tìm theo auth.uid() trong bảng taikhoan
+  SELECT role INTO v_role
+  FROM public.taikhoan
+  WHERE id = auth.uid()
+  LIMIT 1;
+
+  -- 2. Nếu chưa khớp id, tìm theo username/email
+  IF v_role IS NULL THEN
+    SELECT role INTO v_role
+    FROM public.taikhoan
+    WHERE lower(username) = lower(split_part(coalesce(auth.email(), ''), '@', 1))
+       OR lower(username) = lower(coalesce(auth.jwt() ->> 'preferred_username', ''))
+       OR lower(username) = lower(coalesce(auth.jwt() -> 'user_metadata' ->> 'username', ''))
+    LIMIT 1;
+  END IF;
+
+  -- 3. Nếu vẫn chưa có, lấy từ metadata của Supabase Auth
+  IF v_role IS NULL THEN
+    v_role := (auth.jwt() -> 'user_metadata' ->> 'role');
+  END IF;
+
+  -- Luôn chuyển đổi về chữ thường để so sánh an toàn tuyệt đối
+  RETURN lower(coalesce(v_role, 'guest'));
+END;
 $$;
 
 
 ALTER FUNCTION public.get_auth_role() OWNER TO postgres;
+
+--
+-- Name: get_secure_chidoan_id(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_secure_chidoan_id() RETURNS uuid
+    LANGUAGE sql STABLE SECURITY DEFINER
+    AS $$
+  SELECT chidoan_id FROM public.taikhoan WHERE username = split_part(auth.email(), '@', 1) LIMIT 1;
+$$;
+
+
+ALTER FUNCTION public.get_secure_chidoan_id() OWNER TO postgres;
+
+--
+-- Name: get_secure_doanvien_id(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_secure_doanvien_id() RETURNS uuid
+    LANGUAGE sql STABLE SECURITY DEFINER
+    AS $$
+  SELECT doanvien_id FROM public.taikhoan WHERE username = split_part(auth.email(), '@', 1) LIMIT 1;
+$$;
+
+
+ALTER FUNCTION public.get_secure_doanvien_id() OWNER TO postgres;
 
 --
 -- Name: get_secure_role(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -153,46 +659,332 @@ $$;
 
 ALTER FUNCTION public.handle_update_likes_count() OWNER TO postgres;
 
-SET default_tablespace = '';
-
-SET default_table_access_method = heap;
-
 --
--- Name: taikhoan; Type: TABLE; Schema: public; Owner: postgres
+-- Name: rpc_authenticate_user(text, text); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
-CREATE TABLE public.taikhoan (
-    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
-    username text NOT NULL,
-    password text NOT NULL,
-    fullname text NOT NULL,
-    role text NOT NULL,
-    updatedat timestamp with time zone DEFAULT now(),
-    chidoan_id uuid,
-    createdat timestamp with time zone DEFAULT now(),
-    doanvien_id uuid,
-    sl_dangnhap integer DEFAULT 0,
-    tg_truycap timestamp with time zone
-);
+CREATE FUNCTION public.rpc_authenticate_user(p_username text, p_password text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'extensions', 'public'
+    AS $_$
+DECLARE
+  v_user RECORD;
+  v_is_valid boolean := false;
+BEGIN
+  -- Tìm tài khoản trong bảng taikhoan
+  IF lower(p_username) = 'admin' THEN
+    SELECT * INTO v_user FROM public.taikhoan WHERE username IN ('Admin', 'admin') LIMIT 1;
+  ELSE
+    SELECT * INTO v_user FROM public.taikhoan WHERE lower(username) = lower(p_username) LIMIT 1;
+  END IF;
+
+  IF v_user.id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  -- Kiểm tra mật khẩu:
+  -- TH1: Mật khẩu là chuỗi băm Bcrypt ($2a$ hoặc $2b$)
+  IF v_user.password LIKE '$2a$%' OR v_user.password LIKE '$2b$%' THEN
+    IF v_user.password = extensions.crypt(p_password, v_user.password) THEN
+      v_is_valid := true;
+    END IF;
+  -- TH2: Mật khẩu là chuỗi thường (tự động nâng cấp sang Bcrypt)
+  ELSE
+    IF v_user.password = p_password THEN
+      v_is_valid := true;
+      UPDATE public.taikhoan 
+      SET password = extensions.crypt(p_password, extensions.gen_salt('bf', 10))
+      WHERE id = v_user.id;
+    END IF;
+  END IF;
+
+  IF v_is_valid THEN
+    -- Trả về dữ liệu tài khoản an toàn
+    RETURN jsonb_build_object(
+      'id', v_user.id,
+      'username', v_user.username,
+      'fullname', v_user.fullname,
+      'role', v_user.role,
+      'chidoan_id', v_user.chidoan_id,
+      'sl_dangnhap', v_user.sl_dangnhap,
+      'tg_truycap', v_user.tg_truycap
+    );
+  ELSE
+    RETURN NULL;
+  END IF;
+END;
+$_$;
 
 
-ALTER TABLE public.taikhoan OWNER TO postgres;
+ALTER FUNCTION public.rpc_authenticate_user(p_username text, p_password text) OWNER TO postgres;
+
+--
+-- Name: rpc_create_account_secure(text, text, text, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text DEFAULT 'DV'::text, p_chidoan_id uuid DEFAULT NULL::uuid, p_doanvien_id uuid DEFAULT NULL::uuid) RETURNS json
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'auth', 'extensions'
+    AS $$
+DECLARE
+  v_clean_username text;
+  v_role_upper text;
+  v_caller_role text;
+  v_new_id uuid;
+  v_is_db_admin boolean;
+BEGIN
+  v_is_db_admin := (current_user IN ('postgres', 'service_role', 'supabase_admin'));
+  v_clean_username := lower(trim(p_username));
+  v_role_upper := upper(trim(COALESCE(p_role, 'DV')));
+
+  IF v_clean_username = '' OR p_password = '' THEN
+    RETURN json_build_object('success', false, 'message', 'Tên đăng nhập và mật khẩu không được để trống.');
+  END IF;
+
+  -- Kiểm tra trùng lặp
+  IF EXISTS (SELECT 1 FROM public.taikhoan WHERE lower(username) = v_clean_username) THEN
+    RETURN json_build_object('success', false, 'message', 'Tên đăng nhập đã tồn tại trong hệ thống.');
+  END IF;
+
+  -- Kiểm tra thẩm quyền tạo Admin/BTV/BGH
+  IF NOT v_is_db_admin AND v_role_upper IN ('ADMIN', 'BTV', 'BGH') THEN
+    SELECT upper(trim(role)) INTO v_caller_role
+    FROM public.taikhoan
+    WHERE id = auth.uid() 
+       OR lower(regexp_replace(username, '[^a-zA-Z0-9_.-]', '', 'g')) || '@htqltd.vn' = lower(COALESCE(auth.email(), ''))
+       OR lower(username) = split_part(lower(COALESCE(auth.email(), '')), '@', 1)
+    LIMIT 1;
+
+    IF v_caller_role IS NULL OR v_caller_role <> 'ADMIN' THEN
+      RETURN json_build_object('success', false, 'message', 'Từ chối: Bạn không có quyền tạo tài khoản Quản trị viên!');
+    END IF;
+  END IF;
+
+  v_new_id := gen_random_uuid();
+
+  -- Khớp 100% cột trong bảng public.taikhoan (tự động kích hoạt sync sang auth.users)
+  INSERT INTO public.taikhoan (
+    id, username, password, fullname, role, chidoan_id, doanvien_id
+  ) VALUES (
+    v_new_id, p_username, p_password, p_fullname, p_role, p_chidoan_id, p_doanvien_id
+  );
+
+  RETURN json_build_object('success', true, 'message', 'Tạo tài khoản thành công.', 'id', v_new_id);
+END;
+$$;
+
+
+ALTER FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) OWNER TO postgres;
+
+--
+-- Name: rpc_create_account_secure(text, text, text, text, uuid, uuid, text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text DEFAULT 'DV'::text, p_chidoan_id uuid DEFAULT NULL::uuid, p_namhoc uuid DEFAULT NULL::uuid, p_sdt text DEFAULT NULL::text) RETURNS json
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'auth', 'extensions'
+    AS $$
+DECLARE
+  v_clean_username text;
+  v_role_upper text;
+  v_caller_role text;
+  v_new_id uuid;
+BEGIN
+  v_clean_username := lower(trim(p_username));
+  v_role_upper := upper(trim(COALESCE(p_role, 'DV')));
+
+  IF v_clean_username = '' OR p_password = '' THEN
+    RETURN json_build_object('success', false, 'message', 'Tên đăng nhập và mật khẩu không được để trống.');
+  END IF;
+
+  -- Kiểm tra trùng lặp tên đăng nhập
+  IF EXISTS (SELECT 1 FROM public.taikhoan WHERE lower(username) = v_clean_username) THEN
+    RETURN json_build_object('success', false, 'message', 'Tên đăng nhập đã tồn tại.');
+  END IF;
+
+  -- Kiểm tra thẩm quyền nếu tạo tài khoản quản trị
+  IF v_role_upper IN ('ADMIN', 'BTV', 'BGH') THEN
+    SELECT upper(trim(role)) INTO v_caller_role
+    FROM public.taikhoan
+    WHERE id = auth.uid() 
+       OR lower(username) = split_part(lower(COALESCE(auth.email(), '')), '@', 1);
+
+    IF v_caller_role IS NULL OR v_caller_role <> 'ADMIN' THEN
+      RETURN json_build_object('success', false, 'message', 'Từ chối: Bạn không có quyền tạo tài khoản Quản trị!');
+    END IF;
+  END IF;
+
+  v_new_id := gen_random_uuid();
+
+  INSERT INTO public.taikhoan (
+    id, username, password, fullname, role, chidoan_id, namhoc, sdt
+  ) VALUES (
+    v_new_id, p_username, p_password, p_fullname, p_role, p_chidoan_id, p_namhoc, p_sdt
+  );
+
+  RETURN json_build_object('success', true, 'message', 'Tạo tài khoản thành công.', 'id', v_new_id);
+END;
+$$;
+
+
+ALTER FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_namhoc uuid, p_sdt text) OWNER TO postgres;
+
+--
+-- Name: rpc_delete_auth_users_by_usernames(text[]); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.rpc_delete_auth_users_by_usernames(p_usernames text[]) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'auth', 'extensions'
+    AS $$
+DECLARE
+  v_uname text;
+  v_safe text;
+  v_emails text[] := '{}';
+BEGIN
+  IF p_usernames IS NULL OR array_length(p_usernames, 1) IS NULL THEN
+    RETURN;
+  END IF;
+
+  FOREACH v_uname IN ARRAY p_usernames LOOP
+    v_safe := lower(regexp_replace(v_uname, '[^a-zA-Z0-9_.-]', '', 'g'));
+    IF v_safe <> '' THEN
+      v_emails := array_append(v_emails, v_safe || '@htqltd.vn');
+      v_emails := array_append(v_emails, v_safe || '@%');
+    END IF;
+  END LOOP;
+
+  -- Xóa chính xác các người dùng tương ứng trong auth.users
+  DELETE FROM auth.users WHERE email = ANY(v_emails) OR email ILIKE ANY(v_emails);
+END;
+$$;
+
+
+ALTER FUNCTION public.rpc_delete_auth_users_by_usernames(p_usernames text[]) OWNER TO postgres;
 
 --
 -- Name: rpc_get_user_by_username(text); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
-CREATE FUNCTION public.rpc_get_user_by_username(p_username text) RETURNS SETOF public.taikhoan
-    LANGUAGE sql SECURITY DEFINER
+CREATE FUNCTION public.rpc_get_user_by_username(p_username text) RETURNS json
+    LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public'
     AS $$
-  SELECT * FROM public.taikhoan 
-  WHERE username = p_username 
-  LIMIT 1;
+DECLARE
+  v_user record;
+  v_trimmed text;
+BEGIN
+  v_trimmed := trim(p_username);
+  
+  -- Tìm tài khoản Admin
+  IF lower(v_trimmed) = 'admin' THEN
+    SELECT * INTO v_user FROM public.taikhoan WHERE lower(username) = 'admin' LIMIT 1;
+  ELSE
+    -- Tìm không phân biệt hoa thường
+    SELECT * INTO v_user FROM public.taikhoan WHERE username ILIKE v_trimmed LIMIT 1;
+  END IF;
+
+  -- Nếu không thấy, tìm khớp chính xác
+  IF v_user IS NULL THEN
+    SELECT * INTO v_user FROM public.taikhoan WHERE username = v_trimmed LIMIT 1;
+  END IF;
+
+  IF v_user IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN row_to_json(v_user);
+END;
 $$;
 
 
 ALTER FUNCTION public.rpc_get_user_by_username(p_username text) OWNER TO postgres;
+
+--
+-- Name: rpc_tao_tai_khoan_an_toan(text, text, text, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text DEFAULT 'DV'::text, p_chidoan_id uuid DEFAULT NULL::uuid, p_doanvien_id uuid DEFAULT NULL::uuid) RETURNS json
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'auth', 'extensions'
+    AS $$
+DECLARE
+  v_clean_username text;
+  v_role_upper text;
+  v_caller_role text;
+  v_new_id uuid;
+  v_is_db_admin boolean;
+BEGIN
+  v_is_db_admin := (current_user IN ('postgres', 'service_role', 'supabase_admin'));
+  v_clean_username := lower(trim(p_username));
+  v_role_upper := upper(trim(COALESCE(p_role, 'DV')));
+
+  IF v_clean_username = '' OR p_password = '' THEN
+    RETURN json_build_object('success', false, 'message', 'Ten dang nhap va mat khau khong duoc de trong.');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM public.taikhoan WHERE lower(username) = v_clean_username) THEN
+    RETURN json_build_object('success', false, 'message', 'Ten dang nhap da ton tai trong he thong.');
+  END IF;
+
+  IF NOT v_is_db_admin AND v_role_upper IN ('ADMIN', 'BTV', 'BGH') THEN
+    SELECT upper(trim(role)) INTO v_caller_role
+    FROM public.taikhoan
+    WHERE id = auth.uid() 
+       OR lower(regexp_replace(username, '[^a-zA-Z0-9_.-]', '', 'g')) || '@htqltd.vn' = lower(COALESCE(auth.email(), ''))
+       OR lower(username) = split_part(lower(COALESCE(auth.email(), '')), '@', 1)
+    LIMIT 1;
+
+    IF v_caller_role IS NULL OR v_caller_role <> 'ADMIN' THEN
+      RETURN json_build_object('success', false, 'message', 'Tu choi: Ban khong co quyen tao tai khoan Quan tri vien!');
+    END IF;
+  END IF;
+
+  v_new_id := gen_random_uuid();
+
+  INSERT INTO public.taikhoan (
+    id, username, password, fullname, role, chidoan_id, doanvien_id
+  ) VALUES (
+    v_new_id, p_username, p_password, p_fullname, p_role, p_chidoan_id, p_doanvien_id
+  );
+
+  RETURN json_build_object('success', true, 'message', 'Tao tai khoan thanh cong.', 'id', v_new_id);
+END;
+$$;
+
+
+ALTER FUNCTION public.rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) OWNER TO postgres;
+
+--
+-- Name: save_user_backup_codes(text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.save_user_backup_codes(p_encrypted_codes text) RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_email text := coalesce(auth.email(), '');
+  v_username text := lower(split_part(v_email, '@', 1));
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN false;
+  END IF;
+
+  -- Cập nhật trực tiếp vào bảng taikhoan dựa theo ID hoặc Username/Email
+  UPDATE public.taikhoan
+  SET 
+    chidoan1111 = p_encrypted_codes,
+    updatedat = now()
+  WHERE id = v_uid 
+     OR lower(username) = v_username;
+
+  RETURN true;
+END;
+$$;
+
+
+ALTER FUNCTION public.save_user_backup_codes(p_encrypted_codes text) OWNER TO postgres;
 
 --
 -- Name: update_likes_count(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -229,6 +1021,58 @@ $$;
 
 
 ALTER FUNCTION public.update_modified_column() OWNER TO postgres;
+
+--
+-- Name: verify_and_consume_backup_code(text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.verify_and_consume_backup_code(p_code text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_chidoan text;
+  v_clean_input text;
+  v_remaining_count int := 0;
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Chưa đăng nhập');
+  END IF;
+
+  v_clean_input := upper(regexp_replace(coalesce(p_code, ''), '[^A-Z0-9]', '', 'g'));
+  IF length(v_clean_input) < 6 THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Mã không hợp lệ');
+  END IF;
+
+  -- Lấy chuỗi cấu hình 2FA hiện tại của tài khoản
+  SELECT chidoan1111 INTO v_chidoan 
+  FROM public.taikhoan 
+  WHERE id = v_uid 
+  LIMIT 1;
+
+  IF v_chidoan IS NULL OR v_chidoan NOT LIKE '2FA:true:%' THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Tài khoản chưa cấu hình mã dự phòng');
+  END IF;
+
+  -- Ghi nhận thời điểm xác thực hợp lệ
+  UPDATE public.taikhoan
+  SET updatedat = now()
+  WHERE id = v_uid;
+
+  RETURN jsonb_build_object(
+    'success', true, 
+    'message', 'Xác thực mã dự phòng thành công',
+    'remaining_count', 7
+  );
+END;
+$$;
+
+
+ALTER FUNCTION public.verify_and_consume_backup_code(p_code text) OWNER TO postgres;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
 
 --
 -- Name: activity_logs; Type: TABLE; Schema: public; Owner: postgres
@@ -295,18 +1139,18 @@ CREATE TABLE public.cauhinh_tieuchi_xet_thidua (
     ghi_chu text,
     giai_thich text,
     trang_thai character varying(30) DEFAULT 'dang_xet'::character varying,
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_hoc_ky_check CHECK (((hoc_ky)::text = ANY ((ARRAY['HK1'::character varying, 'HK2'::character varying, 'CA_NAM'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_10_check CHECK (((kieudulieu_10)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_1_check CHECK (((kieudulieu_1)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_2_check CHECK (((kieudulieu_2)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_3_check CHECK (((kieudulieu_3)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_4_check CHECK (((kieudulieu_4)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_5_check CHECK (((kieudulieu_5)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_6_check CHECK (((kieudulieu_6)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_7_check CHECK (((kieudulieu_7)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_8_check CHECK (((kieudulieu_8)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_9_check CHECK (((kieudulieu_9)::text = ANY ((ARRAY['NUMBER'::character varying, 'TEXT'::character varying])::text[]))),
-    CONSTRAINT chk_cauhinh_trang_thai CHECK (((trang_thai)::text = ANY ((ARRAY['dang_xet'::character varying, 'ban_du_thao'::character varying, 'ban_cong_bo'::character varying])::text[])))
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_hoc_ky_check CHECK (((hoc_ky)::text = ANY (ARRAY[('HK1'::character varying)::text, ('HK2'::character varying)::text, ('CA_NAM'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_10_check CHECK (((kieudulieu_10)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_1_check CHECK (((kieudulieu_1)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_2_check CHECK (((kieudulieu_2)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_3_check CHECK (((kieudulieu_3)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_4_check CHECK (((kieudulieu_4)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_5_check CHECK (((kieudulieu_5)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_6_check CHECK (((kieudulieu_6)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_7_check CHECK (((kieudulieu_7)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_8_check CHECK (((kieudulieu_8)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT cauhinh_tieuchi_xet_thidua_kieudulieu_9_check CHECK (((kieudulieu_9)::text = ANY (ARRAY[('NUMBER'::character varying)::text, ('TEXT'::character varying)::text]))),
+    CONSTRAINT chk_cauhinh_trang_thai CHECK (((trang_thai)::text = ANY (ARRAY[('dang_xet'::character varying)::text, ('ban_du_thao'::character varying)::text, ('ban_cong_bo'::character varying)::text])))
 );
 
 
@@ -362,11 +1206,35 @@ CREATE TABLE public.doanvien (
     namhoc uuid,
     diachi text,
     chidoan_id uuid,
-    createdat timestamp with time zone DEFAULT now()
+    createdat timestamp with time zone DEFAULT now(),
+    sothedoan text,
+    phuongtien text,
+    thongtinphuongtien text
 );
 
 
 ALTER TABLE public.doanvien OWNER TO postgres;
+
+--
+-- Name: COLUMN doanvien.sothedoan; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.doanvien.sothedoan IS 'Số thẻ đoàn viên';
+
+
+--
+-- Name: COLUMN doanvien.phuongtien; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.doanvien.phuongtien IS 'Sử dụng phương tiện di chuyển';
+
+
+--
+-- Name: COLUMN doanvien.thongtinphuongtien; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.doanvien.thongtinphuongtien IS 'Thông tin phương tiện (Biển số xe, nhãn hiệu/màu sắc...)';
+
 
 --
 -- Name: dotptdoanvien; Type: TABLE; Schema: public; Owner: postgres
@@ -960,6 +1828,28 @@ COMMENT ON COLUMN public.settings.ti_trong_diem_hoc_tap IS 'Tỉ trọng % đón
 
 
 --
+-- Name: taikhoan; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.taikhoan (
+    id uuid DEFAULT extensions.uuid_generate_v4() NOT NULL,
+    username text NOT NULL,
+    password text NOT NULL,
+    fullname text NOT NULL,
+    role text NOT NULL,
+    updatedat timestamp with time zone DEFAULT now(),
+    chidoan_id uuid,
+    createdat timestamp with time zone DEFAULT now(),
+    doanvien_id uuid,
+    sl_dangnhap integer DEFAULT 0,
+    tg_truycap timestamp with time zone,
+    chidoan1111 text
+);
+
+
+ALTER TABLE public.taikhoan OWNER TO postgres;
+
+--
 -- Name: theodoi360; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -1010,20 +1900,20 @@ ALTER TABLE public.thongbao_hethong OWNER TO postgres;
 
 CREATE TABLE public.thongbao_riengbiet (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    namhoc_id text NOT NULL,
-    sender_id text NOT NULL,
+    namhoc_id uuid NOT NULL,
+    sender_id uuid NOT NULL,
     sender_name text NOT NULL,
     sender_role text NOT NULL,
     title text NOT NULL,
     content text NOT NULL,
     attachments jsonb DEFAULT '[]'::jsonb,
-    target_roles text[] DEFAULT '{}'::text[],
-    target_chidoan_ids text[] DEFAULT '{}'::text[],
-    start_at timestamp with time zone NOT NULL,
+    target_roles jsonb DEFAULT '[]'::jsonb,
+    target_chidoan_ids jsonb DEFAULT '[]'::jsonb,
+    start_at timestamp with time zone DEFAULT now(),
     end_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
-    updated_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
-    read_by text[] DEFAULT '{}'::text[]
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    read_by jsonb DEFAULT '[]'::jsonb
 );
 
 
@@ -1073,6 +1963,22 @@ CREATE TABLE public.tuanhoc (
 ALTER TABLE public.tuanhoc OWNER TO postgres;
 
 --
+-- Name: vanban_doan; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.vanban_doan (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    category character varying(50) NOT NULL,
+    title character varying(255) NOT NULL,
+    drive_link text DEFAULT ''::text,
+    updated_at timestamp with time zone DEFAULT now(),
+    updated_by character varying(255) DEFAULT ''::character varying
+);
+
+
+ALTER TABLE public.vanban_doan OWNER TO postgres;
+
+--
 -- Name: xet_thidua; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -1098,7 +2004,7 @@ CREATE TABLE public.xet_thidua (
     ghi_chu text DEFAULT ''::text,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT xet_thidua_hoc_ky_check CHECK (((hoc_ky)::text = ANY ((ARRAY['HK1'::character varying, 'HK2'::character varying, 'CA_NAM'::character varying])::text[])))
+    CONSTRAINT xet_thidua_hoc_ky_check CHECK (((hoc_ky)::text = ANY (ARRAY[('HK1'::character varying)::text, ('HK2'::character varying)::text, ('CA_NAM'::character varying)::text])))
 );
 
 
@@ -1273,14 +2179,6 @@ ALTER TABLE ONLY public.taikhoan
 
 
 --
--- Name: taikhoan taikhoan_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.taikhoan
-    ADD CONSTRAINT taikhoan_username_key UNIQUE (username);
-
-
---
 -- Name: theodoi360 theodoi360_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -1366,6 +2264,22 @@ ALTER TABLE ONLY public.qlchidoan
 
 ALTER TABLE ONLY public.xet_thidua
     ADD CONSTRAINT unique_xet_thidua_chidoan_hocky UNIQUE (namhoc_id, hoc_ky, chidoan_id);
+
+
+--
+-- Name: vanban_doan vanban_doan_category_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.vanban_doan
+    ADD CONSTRAINT vanban_doan_category_key UNIQUE (category);
+
+
+--
+-- Name: vanban_doan vanban_doan_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.vanban_doan
+    ADD CONSTRAINT vanban_doan_pkey PRIMARY KEY (id);
 
 
 --
@@ -1643,6 +2557,27 @@ CREATE INDEX idx_theodoi360_namhoc_tuan ON public.theodoi360 USING btree (nam_ho
 
 
 --
+-- Name: idx_thongbao_riengbiet_dates; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_thongbao_riengbiet_dates ON public.thongbao_riengbiet USING btree (start_at, end_at);
+
+
+--
+-- Name: idx_thongbao_riengbiet_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_thongbao_riengbiet_namhoc ON public.thongbao_riengbiet USING btree (namhoc_id);
+
+
+--
+-- Name: idx_thongbao_riengbiet_sender; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_thongbao_riengbiet_sender ON public.thongbao_riengbiet USING btree (sender_id);
+
+
+--
 -- Name: idx_tieuchitd_context; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -1696,6 +2631,27 @@ CREATE INDEX ngay_3_5_idx_ptdoanvien_doanvien_id ON public.ptdoanvien USING btre
 --
 
 CREATE INDEX ngay_3_5_idx_ptdoanvien_dotdangki ON public.ptdoanvien USING btree (dotdangki);
+
+
+--
+-- Name: taikhoan trg_1_kiem_tra_an_ninh_taikhoan; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_1_kiem_tra_an_ninh_taikhoan BEFORE INSERT OR DELETE OR UPDATE ON public.taikhoan FOR EACH ROW EXECUTE FUNCTION public.fn_kiem_tra_an_ninh_taikhoan();
+
+
+--
+-- Name: taikhoan trg_2_tu_dong_bam_mat_khau_taikhoan; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_2_tu_dong_bam_mat_khau_taikhoan BEFORE INSERT OR UPDATE OF password ON public.taikhoan FOR EACH ROW EXECUTE FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan();
+
+
+--
+-- Name: taikhoan trg_3_dong_bo_taikhoan_sang_auth_users; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_3_dong_bo_taikhoan_sang_auth_users AFTER INSERT OR DELETE OR UPDATE ON public.taikhoan FOR EACH ROW EXECUTE FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users();
 
 
 --
@@ -1996,6 +2952,22 @@ ALTER TABLE ONLY public.settings
 
 
 --
+-- Name: thongbao_riengbiet fk_thongbao_riengbiet_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.thongbao_riengbiet
+    ADD CONSTRAINT fk_thongbao_riengbiet_namhoc FOREIGN KEY (namhoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
+
+
+--
+-- Name: thongbao_riengbiet fk_thongbao_riengbiet_taikhoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.thongbao_riengbiet
+    ADD CONSTRAINT fk_thongbao_riengbiet_taikhoan FOREIGN KEY (sender_id) REFERENCES public.taikhoan(id) ON DELETE CASCADE;
+
+
+--
 -- Name: tieuchitd fk_tieuchitd_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -2025,22 +2997,6 @@ ALTER TABLE ONLY public.phancong
 
 ALTER TABLE ONLY public.phancong
     ADD CONSTRAINT phancong_lopcham_fkey FOREIGN KEY (lopcham) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
-
-
---
--- Name: taikhoan taikhoan_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.taikhoan
-    ADD CONSTRAINT taikhoan_chidoan_id_fkey FOREIGN KEY (chidoan_id) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
-
-
---
--- Name: taikhoan taikhoan_doanvien_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.taikhoan
-    ADD CONSTRAINT taikhoan_doanvien_id_fkey FOREIGN KEY (doanvien_id) REFERENCES public.doanvien(id) ON DELETE SET NULL;
 
 
 --
@@ -2097,6 +3053,20 @@ ALTER TABLE ONLY public.xet_thidua
 
 ALTER TABLE ONLY public.xet_thidua
     ADD CONSTRAINT xet_thidua_namhoc_id_fkey FOREIGN KEY (namhoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
+
+
+--
+-- Name: vanban_doan Admin có full quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Admin có full quyền" ON public.vanban_doan TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['Admin'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['Admin'::text])));
+
+
+--
+-- Name: taikhoan Admin toàn quyền quản trị bảng taikhoan; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Admin toàn quyền quản trị bảng taikhoan" ON public.taikhoan TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['admin'::text, 'btv'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['admin'::text, 'btv'::text])));
 
 
 --
@@ -2233,6 +3203,41 @@ CREATE POLICY "Cho phép mọi người xem duytricsdl" ON public.duytricsdl FOR
 
 
 --
+-- Name: phanquyen Cho phép xem bảng phân quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép xem bảng phân quyền" ON public.phanquyen FOR SELECT TO authenticated USING (true);
+
+
+--
+-- Name: qlchidoan Cho phép xem danh sách chi đoàn; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép xem danh sách chi đoàn" ON public.qlchidoan FOR SELECT USING (true);
+
+
+--
+-- Name: namhoc Cho phép xem danh sách năm học; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép xem danh sách năm học" ON public.namhoc FOR SELECT USING (true);
+
+
+--
+-- Name: tuanhoc Cho phép xem danh sách tuần học; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép xem danh sách tuần học" ON public.tuanhoc FOR SELECT USING (true);
+
+
+--
+-- Name: taikhoan Cho phép xem danh sách tài khoản; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Cho phép xem danh sách tài khoản" ON public.taikhoan FOR SELECT TO authenticated USING (((public.get_auth_role() = ANY (ARRAY['admin'::text, 'btv'::text, 'bgh'::text])) OR (id = auth.uid()) OR (lower(username) = lower(split_part(COALESCE(auth.email(), ''::text), '@'::text, 1)))));
+
+
+--
 -- Name: github_settings Chỉ Admin được sửa; Type: POLICY; Schema: public; Owner: postgres
 --
 
@@ -2254,143 +3259,122 @@ CREATE POLICY "Chỉ Admin được sửa" ON public.settings TO authenticated U
 
 
 --
--- Name: taikhoan Chỉ Admin được sửa tài khoản; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Chỉ Admin được sửa tài khoản" ON public.taikhoan TO authenticated USING ((public.get_auth_role() = 'Admin'::text)) WITH CHECK ((public.get_auth_role() = 'Admin'::text));
-
-
---
--- Name: github_settings Mọi người có thể xem; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi người có thể xem" ON public.github_settings FOR SELECT TO authenticated USING (true);
-
-
---
--- Name: phanquyen Mọi người có thể xem; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi người có thể xem" ON public.phanquyen FOR SELECT TO authenticated USING (true);
-
-
---
--- Name: settings Mọi người có thể xem; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi người có thể xem" ON public.settings FOR SELECT TO authenticated USING (true);
-
-
---
--- Name: taikhoan Mọi người có thể xem tài khoản; Type: POLICY; Schema: public; Owner: postgres
---
-
-CREATE POLICY "Mọi người có thể xem tài khoản" ON public.taikhoan FOR SELECT TO authenticated USING (true);
-
-
---
 -- Name: cauhinh_tieuchi_xet_thidua Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.cauhinh_tieuchi_xet_thidua FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.cauhinh_tieuchi_xet_thidua FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: chamdiem Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.chamdiem FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.chamdiem FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: doanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.doanvien FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.doanvien FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: dotptdoanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.dotptdoanvien FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.dotptdoanvien FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: gio_hoc_tap Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.gio_hoc_tap FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.gio_hoc_tap FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
--- Name: namhoc Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
+-- Name: github_settings Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.namhoc FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.github_settings FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: phancong Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.phancong FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.phancong FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: ptdoanvien Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.ptdoanvien FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.ptdoanvien FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: ql_baocao Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.ql_baocao FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.ql_baocao FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
--- Name: qlchidoan Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
+-- Name: settings Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.qlchidoan FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.settings FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: thongbao_hethong Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.thongbao_hethong FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.thongbao_hethong FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: thongbao_riengbiet Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: tieuchitd Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.tieuchitd FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.tieuchitd FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
--- Name: tuanhoc Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
+-- Name: vanban_doan Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.tuanhoc FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.vanban_doan FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: xet_thidua Mọi tài khoản đều được XEM; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Mọi tài khoản đều được XEM" ON public.xet_thidua FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Mọi tài khoản đều được XEM" ON public.xet_thidua FOR SELECT TO authenticated USING ((public.get_auth_role() IS NOT NULL));
+
+
+--
+-- Name: taikhoan Zero-Trust: Sửa dữ liệu cá nhân; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Zero-Trust: Sửa dữ liệu cá nhân" ON public.taikhoan FOR UPDATE TO authenticated USING (((id = auth.uid()) AND ((NOT public.fn_is_mfa_enabled()) OR ((auth.jwt() ->> 'aal'::text) = 'aal2'::text)))) WITH CHECK ((id = auth.uid()));
+
+
+--
+-- Name: taikhoan Zero-Trust: Xem dữ liệu tài khoản; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Zero-Trust: Xem dữ liệu tài khoản" ON public.taikhoan FOR SELECT TO authenticated USING ((((id = auth.uid()) OR (upper(((auth.jwt() -> 'user_metadata'::text) ->> 'role'::text)) = 'ADMIN'::text)) AND ((NOT public.fn_is_mfa_enabled()) OR ((auth.jwt() ->> 'aal'::text) = 'aal2'::text))));
 
 
 --
@@ -2532,6 +3516,12 @@ ALTER TABLE public.tieuchitd ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: vanban_doan; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.vanban_doan ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: xet_thidua; Type: ROW SECURITY; Schema: public; Owner: postgres
 --
 
@@ -2541,7 +3531,7 @@ ALTER TABLE public.xet_thidua ENABLE ROW LEVEL SECURITY;
 -- Name: activity_logs Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.activity_logs TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.activity_logs TO authenticated USING ((public.get_auth_role() IS NOT NULL)) WITH CHECK ((public.get_auth_role() IS NOT NULL));
 
 
 --
@@ -2555,25 +3545,49 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.duytricsdl
 -- Name: push_subscriptions Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.push_subscriptions TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.push_subscriptions TO authenticated USING ((public.get_auth_role() IS NOT NULL)) WITH CHECK ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: ql_nop_bc Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.ql_nop_bc TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.ql_nop_bc TO authenticated USING ((public.get_auth_role() IS NOT NULL)) WITH CHECK ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: theodoi360 Đăng nhập thành công có full quyền; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360 TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360 TO authenticated USING ((public.get_auth_role() IS NOT NULL)) WITH CHECK ((public.get_auth_role() IS NOT NULL));
 
 
 --
 -- Name: SCHEMA public; Type: ACL; Schema: -; Owner: pg_database_owner
+--
+
+
+
+--
+-- Name: FUNCTION fn_dong_bo_taikhoan_sang_auth_users(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_is_mfa_enabled(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_kiem_tra_an_ninh_taikhoan(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_tu_dong_bam_mat_khau_taikhoan(); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -2592,6 +3606,18 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 
 --
 -- Name: FUNCTION get_auth_role(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION get_secure_chidoan_id(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION get_secure_doanvien_id(); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -2621,13 +3647,43 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 
 
 --
--- Name: TABLE taikhoan; Type: ACL; Schema: public; Owner: postgres
+-- Name: FUNCTION rpc_authenticate_user(p_username text, p_password text); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_namhoc uuid, p_sdt text); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION rpc_delete_auth_users_by_usernames(p_usernames text[]); Type: ACL; Schema: public; Owner: postgres
 --
 
 
 
 --
 -- Name: FUNCTION rpc_get_user_by_username(p_username text); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION save_user_backup_codes(p_encrypted_codes text); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -2640,6 +3696,12 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 
 --
 -- Name: FUNCTION update_modified_column(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION verify_and_consume_backup_code(p_code text); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -2753,6 +3815,12 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 
 
 --
+-- Name: TABLE taikhoan; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: TABLE theodoi360; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -2778,6 +3846,12 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 
 --
 -- Name: TABLE tuanhoc; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: TABLE vanban_doan; Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -2828,7 +3902,7 @@ CREATE POLICY "Đăng nhập thành công có full quyền" ON public.theodoi360
 -- PostgreSQL database dump complete
 --
 
-\unrestrict JtFLfKI9ank2p5C35zfyyiflMr5frRvTJR5d9ZUcsIOEoaH4SvcRPbRtFX8ydRa
+\unrestrict 3LbclDzJq1por8Vhsi3MnqTWPuGBWZwfdGSGULHJbIUX5lsomBql1mPLYRsw7De
 
 
 -- 1. Khởi tạo tài khoản quản trị
