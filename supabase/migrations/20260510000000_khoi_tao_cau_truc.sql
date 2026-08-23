@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict jlhqOj4zvCD3rcZ7uVM2Mf48l5c9uaZjbK9WXhOSbqAlStJPhsx5v6fXEZMcakQ
+\restrict d8jcLPjJfab7TGTIdZ0hb8tP9aBRorDQpY6xjaJdoEcr12YNxIBkkfxGQ7PknIz
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -1400,7 +1400,8 @@ CREATE TABLE public.gio_hoc_tap (
     diem_yeu_cauhinh numeric DEFAULT 1,
     diem_tb_hoc_tap numeric(5,2) DEFAULT 0.00,
     updated_at timestamp with time zone DEFAULT timezone('utc'::text, now()),
-    hocky text
+    hocky text,
+    nguoi_nhap text
 );
 
 
@@ -2044,7 +2045,8 @@ CREATE TABLE public.tieuchitd (
     updatedat timestamp with time zone DEFAULT now(),
     hocky text,
     namhoc uuid,
-    createdat timestamp with time zone DEFAULT now()
+    createdat timestamp with time zone DEFAULT now(),
+    nhom text
 );
 
 
@@ -4030,7 +4032,7 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 -- PostgreSQL database dump complete
 --
 
-\unrestrict jlhqOj4zvCD3rcZ7uVM2Mf48l5c9uaZjbK9WXhOSbqAlStJPhsx5v6fXEZMcakQ
+\unrestrict d8jcLPjJfab7TGTIdZ0hb8tP9aBRorDQpY6xjaJdoEcr12YNxIBkkfxGQ7PknIz
 
 
 -- 1. Khởi tạo tài khoản quản trị
