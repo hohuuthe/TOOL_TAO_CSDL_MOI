@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict UbH3DUAHsDMDQrKVgJcH5CieNBZjTlt1sUN2x7PgWXmFDOt00poZS0CYhlla7rp
+\restrict iJ4zPVxDEURqeXsJd29Lyw2mKIaeYoRIUhcgKcYH3HEnL2pUUPcSIqdFtS7Dmi1
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -1190,8 +1190,8 @@ SET default_table_access_method = heap;
 CREATE TABLE public.activity_logs (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     user_id uuid NOT NULL,
-    username text NOT NULL,
-    full_name text NOT NULL,
+    username text DEFAULT ''::text NOT NULL,
+    full_name text DEFAULT ''::text NOT NULL,
     tab_name text NOT NULL,
     table_name text NOT NULL,
     action_type text NOT NULL,
@@ -4034,7 +4034,7 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 -- PostgreSQL database dump complete
 --
 
-\unrestrict UbH3DUAHsDMDQrKVgJcH5CieNBZjTlt1sUN2x7PgWXmFDOt00poZS0CYhlla7rp
+\unrestrict iJ4zPVxDEURqeXsJd29Lyw2mKIaeYoRIUhcgKcYH3HEnL2pUUPcSIqdFtS7Dmi1
 
 
 -- 1. Khởi tạo tài khoản quản trị
