@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict d8jcLPjJfab7TGTIdZ0hb8tP9aBRorDQpY6xjaJdoEcr12YNxIBkkfxGQ7PknIz
+\restrict UbH3DUAHsDMDQrKVgJcH5CieNBZjTlt1sUN2x7PgWXmFDOt00poZS0CYhlla7rp
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -1525,7 +1525,9 @@ CREATE TABLE public.phancong (
     chamlop uuid NOT NULL,
     updatedat timestamp with time zone DEFAULT now(),
     namhoc uuid,
-    createdat timestamp with time zone DEFAULT now()
+    createdat timestamp with time zone DEFAULT now(),
+    chophepsuachamdiem boolean DEFAULT false,
+    chophepsuagiohoctap boolean DEFAULT false
 );
 
 
@@ -2899,7 +2901,7 @@ ALTER TABLE ONLY public.ptdoanvien
 --
 
 ALTER TABLE ONLY public.activity_logs
-    ADD CONSTRAINT activity_logs_namhoc_fkey FOREIGN KEY (namhoc) REFERENCES public.namhoc(id);
+    ADD CONSTRAINT activity_logs_namhoc_fkey FOREIGN KEY (namhoc) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
 
 
 --
@@ -3027,7 +3029,7 @@ ALTER TABLE ONLY public.ptdoanvien
 --
 
 ALTER TABLE ONLY public.ql_baocao
-    ADD CONSTRAINT fk_ql_baocao_namhoc FOREIGN KEY (nam_hoc_id) REFERENCES public.namhoc(id);
+    ADD CONSTRAINT fk_ql_baocao_namhoc FOREIGN KEY (nam_hoc_id) REFERENCES public.namhoc(id) ON UPDATE CASCADE ON DELETE CASCADE;
 
 
 --
@@ -3043,7 +3045,7 @@ ALTER TABLE ONLY public.ql_nop_bc
 --
 
 ALTER TABLE ONLY public.ql_nop_bc
-    ADD CONSTRAINT fk_ql_nop_bc_chidoan FOREIGN KEY (chi_doan_id) REFERENCES public.qlchidoan(id) ON DELETE SET NULL;
+    ADD CONSTRAINT fk_ql_nop_bc_chidoan FOREIGN KEY (chi_doan_id) REFERENCES public.qlchidoan(id) ON UPDATE CASCADE ON DELETE CASCADE;
 
 
 --
@@ -3123,7 +3125,7 @@ ALTER TABLE ONLY public.phancong
 --
 
 ALTER TABLE ONLY public.theodoi360
-    ADD CONSTRAINT theodoi360_doan_vien_vi_pham_fkey FOREIGN KEY (doan_vien_vi_pham_id) REFERENCES public.doanvien(id);
+    ADD CONSTRAINT theodoi360_doan_vien_vi_pham_fkey FOREIGN KEY (doan_vien_vi_pham_id) REFERENCES public.doanvien(id) ON DELETE CASCADE;
 
 
 --
@@ -3131,7 +3133,7 @@ ALTER TABLE ONLY public.theodoi360
 --
 
 ALTER TABLE ONLY public.theodoi360
-    ADD CONSTRAINT theodoi360_nam_hoc_fkey FOREIGN KEY (nam_hoc_id) REFERENCES public.namhoc(id);
+    ADD CONSTRAINT theodoi360_nam_hoc_fkey FOREIGN KEY (nam_hoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
 
 
 --
@@ -3139,7 +3141,7 @@ ALTER TABLE ONLY public.theodoi360
 --
 
 ALTER TABLE ONLY public.theodoi360
-    ADD CONSTRAINT theodoi360_nguoi_to_cao_fkey FOREIGN KEY (nguoi_to_cao_id) REFERENCES public.doanvien(id);
+    ADD CONSTRAINT theodoi360_nguoi_to_cao_fkey FOREIGN KEY (nguoi_to_cao_id) REFERENCES public.doanvien(id) ON DELETE CASCADE;
 
 
 --
@@ -3147,7 +3149,7 @@ ALTER TABLE ONLY public.theodoi360
 --
 
 ALTER TABLE ONLY public.theodoi360
-    ADD CONSTRAINT theodoi360_tieu_chi_fkey FOREIGN KEY (tieu_chi_id) REFERENCES public.tieuchitd(id);
+    ADD CONSTRAINT theodoi360_tieu_chi_fkey FOREIGN KEY (tieu_chi_id) REFERENCES public.tieuchitd(id) ON DELETE CASCADE;
 
 
 --
@@ -3155,7 +3157,7 @@ ALTER TABLE ONLY public.theodoi360
 --
 
 ALTER TABLE ONLY public.theodoi360
-    ADD CONSTRAINT theodoi360_tuan_fkey FOREIGN KEY (tuan_id) REFERENCES public.tuanhoc(id);
+    ADD CONSTRAINT theodoi360_tuan_fkey FOREIGN KEY (tuan_id) REFERENCES public.tuanhoc(id) ON DELETE CASCADE;
 
 
 --
@@ -4032,7 +4034,7 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 -- PostgreSQL database dump complete
 --
 
-\unrestrict d8jcLPjJfab7TGTIdZ0hb8tP9aBRorDQpY6xjaJdoEcr12YNxIBkkfxGQ7PknIz
+\unrestrict UbH3DUAHsDMDQrKVgJcH5CieNBZjTlt1sUN2x7PgWXmFDOt00poZS0CYhlla7rp
 
 
 -- 1. Khởi tạo tài khoản quản trị
