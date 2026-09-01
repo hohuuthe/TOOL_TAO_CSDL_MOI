@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict iJ4zPVxDEURqeXsJd29Lyw2mKIaeYoRIUhcgKcYH3HEnL2pUUPcSIqdFtS7Dmi1
+\restrict LgxLBD0rh4kIHGlUYKfBnYnFgUcdPXpK0SonL4FD91DJqMTJLjwv6xaHN5eLTjH
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -140,38 +140,14 @@ BEGIN
         )::jsonb,
         now(),
         now(),
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        false,
-        false
+        '', '', '', '', '', '', '', '', false, false
       );
 
       INSERT INTO auth.identities (
-        id,
-        user_id,
-        identity_data,
-        provider,
-        provider_id,
-        last_sign_in_at,
-        created_at,
-        updated_at
+        id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at
       ) VALUES (
-        v_user_id,
-        v_user_id,
-        json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb,
-        'email',
-        v_new_email,
-        now(),
-        now(),
-        now()
-      )
-      ON CONFLICT DO NOTHING;
+        v_user_id, v_user_id, json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb, 'email', v_new_email, now(), now(), now()
+      ) ON CONFLICT DO NOTHING;
     ELSE
       UPDATE auth.users
       SET
@@ -184,45 +160,31 @@ BEGIN
           'chidoan_id', NEW.chidoan_id,
           'doanvien_id', NEW.doanvien_id
         )::jsonb,
-        confirmation_token = COALESCE(confirmation_token, ''),
-        recovery_token = COALESCE(recovery_token, ''),
-        email_change_token_new = COALESCE(email_change_token_new, ''),
-        email_change = COALESCE(email_change, ''),
-        phone_change = COALESCE(phone_change, ''),
-        phone_change_token = COALESCE(phone_change_token, ''),
-        email_change_token_current = COALESCE(email_change_token_current, ''),
-        reauthentication_token = COALESCE(reauthentication_token, ''),
-        is_sso_user = COALESCE(is_sso_user, false),
-        is_anonymous = COALESCE(is_anonymous, false),
         updated_at = now()
       WHERE id = v_user_id;
-
-      INSERT INTO auth.identities (
-        id,
-        user_id,
-        identity_data,
-        provider,
-        provider_id,
-        last_sign_in_at,
-        created_at,
-        updated_at
-      ) VALUES (
-        v_user_id,
-        v_user_id,
-        json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb,
-        'email',
-        v_new_email,
-        now(),
-        now(),
-        now()
-      )
-      ON CONFLICT DO NOTHING;
     END IF;
+
+    -- [TÍNH NĂNG MỚI] LƯU UID NGƯỢC LẠI BẢNG TÀI KHOẢN
+    UPDATE public.taikhoan 
+    SET uid = v_user_id 
+    WHERE id = NEW.id AND uid IS DISTINCT FROM v_user_id;
 
     RETURN NEW;
   END IF;
 
   IF TG_OP = 'UPDATE' THEN
+    -- [TÍNH NĂNG MỚI] THUẬT TOÁN CHỐNG LẶP VÔ HẠN (INFINITE LOOP)
+    -- Khi hàm này gọi lệnh UPDATE public.taikhoan ở cuối, nó sẽ kích hoạt lại trigger.
+    -- Đoạn mã này sẽ bắt và chặn đứng vòng lặp nếu phát hiện chỉ có cột uid bị thay đổi.
+    IF NEW.uid IS DISTINCT FROM OLD.uid 
+       AND NEW.username IS NOT DISTINCT FROM OLD.username 
+       AND NEW.password IS NOT DISTINCT FROM OLD.password 
+       AND NEW.role IS NOT DISTINCT FROM OLD.role 
+       AND NEW.chidoan_id IS NOT DISTINCT FROM OLD.chidoan_id 
+       AND NEW.doanvien_id IS NOT DISTINCT FROM OLD.doanvien_id THEN
+      RETURN NEW;
+    END IF;
+
     v_old_email := lower(regexp_replace(COALESCE(OLD.username, ''), '[^a-zA-Z0-9_.-]', '', 'g')) || '@htqltd.vn';
     v_safe_username := lower(regexp_replace(COALESCE(NEW.username, ''), '[^a-zA-Z0-9_.-]', '', 'g'));
     IF v_safe_username = '' THEN
@@ -246,10 +208,7 @@ BEGIN
       UPDATE auth.users
       SET
         email = v_new_email,
-        encrypted_password = CASE 
-          WHEN v_encrypted_pwd IS NOT NULL THEN v_encrypted_pwd 
-          ELSE encrypted_password 
-        END,
+        encrypted_password = CASE WHEN v_encrypted_pwd IS NOT NULL THEN v_encrypted_pwd ELSE encrypted_password END,
         raw_user_meta_data = json_build_object(
           'username', NEW.username,
           'fullname', COALESCE(NEW.fullname, NEW.username),
@@ -257,39 +216,8 @@ BEGIN
           'chidoan_id', NEW.chidoan_id,
           'doanvien_id', NEW.doanvien_id
         )::jsonb,
-        confirmation_token = COALESCE(confirmation_token, ''),
-        recovery_token = COALESCE(recovery_token, ''),
-        email_change_token_new = COALESCE(email_change_token_new, ''),
-        email_change = COALESCE(email_change, ''),
-        phone_change = COALESCE(phone_change, ''),
-        phone_change_token = COALESCE(phone_change_token, ''),
-        email_change_token_current = COALESCE(email_change_token_current, ''),
-        reauthentication_token = COALESCE(reauthentication_token, ''),
-        is_sso_user = COALESCE(is_sso_user, false),
-        is_anonymous = COALESCE(is_anonymous, false),
         updated_at = now()
       WHERE id = v_user_id;
-
-      INSERT INTO auth.identities (
-        id,
-        user_id,
-        identity_data,
-        provider,
-        provider_id,
-        last_sign_in_at,
-        created_at,
-        updated_at
-      ) VALUES (
-        v_user_id,
-        v_user_id,
-        json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb,
-        'email',
-        v_new_email,
-        now(),
-        now(),
-        now()
-      )
-      ON CONFLICT DO NOTHING;
     ELSE
       v_user_id := gen_random_uuid();
       IF v_encrypted_pwd IS NULL THEN
@@ -303,78 +231,25 @@ BEGIN
       END IF;
 
       INSERT INTO auth.users (
-        instance_id,
-        id,
-        aud,
-        role,
-        email,
-        encrypted_password,
-        email_confirmed_at,
-        raw_app_meta_data,
-        raw_user_meta_data,
-        created_at,
-        updated_at,
-        confirmation_token,
-        recovery_token,
-        email_change_token_new,
-        email_change,
-        phone_change,
-        phone_change_token,
-        email_change_token_current,
-        reauthentication_token,
-        is_sso_user,
-        is_anonymous
+        instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at, confirmation_token, recovery_token, email_change_token_new, email_change, phone_change, phone_change_token, email_change_token_current, reauthentication_token, is_sso_user, is_anonymous
       ) VALUES (
-        '00000000-0000-0000-0000-000000000000',
-        v_user_id,
-        'authenticated',
-        'authenticated',
-        v_new_email,
-        v_encrypted_pwd,
-        now(),
-        '{"provider":"email","providers":["email"]}'::jsonb,
+        '00000000-0000-0000-0000-000000000000', v_user_id, 'authenticated', 'authenticated', v_new_email, v_encrypted_pwd, now(), '{"provider":"email","providers":["email"]}'::jsonb,
         json_build_object(
-          'username', NEW.username,
-          'fullname', COALESCE(NEW.fullname, NEW.username),
-          'role', COALESCE(NEW.role, 'DV'),
-          'chidoan_id', NEW.chidoan_id,
-          'doanvien_id', NEW.doanvien_id
-        )::jsonb,
-        now(),
-        now(),
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        false,
-        false
+          'username', NEW.username, 'fullname', COALESCE(NEW.fullname, NEW.username), 'role', COALESCE(NEW.role, 'DV'), 'chidoan_id', NEW.chidoan_id, 'doanvien_id', NEW.doanvien_id
+        )::jsonb, now(), now(), '', '', '', '', '', '', '', '', false, false
       );
 
       INSERT INTO auth.identities (
-        id,
-        user_id,
-        identity_data,
-        provider,
-        provider_id,
-        last_sign_in_at,
-        created_at,
-        updated_at
+        id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at
       ) VALUES (
-        v_user_id,
-        v_user_id,
-        json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb,
-        'email',
-        v_new_email,
-        now(),
-        now(),
-        now()
-      )
-      ON CONFLICT DO NOTHING;
+        v_user_id, v_user_id, json_build_object('sub', v_user_id::text, 'email', v_new_email)::jsonb, 'email', v_new_email, now(), now(), now()
+      ) ON CONFLICT DO NOTHING;
     END IF;
+
+    -- [TÍNH NĂNG MỚI] LƯU UID NGƯỢC LẠI BẢNG TÀI KHOẢN
+    UPDATE public.taikhoan 
+    SET uid = v_user_id 
+    WHERE id = NEW.id AND uid IS DISTINCT FROM v_user_id;
 
     RETURN NEW;
   END IF;
@@ -420,14 +295,18 @@ DECLARE
   v_target_role_upper text;
   v_is_db_admin boolean;
 BEGIN
+  -- Kiểm tra xem người thực hiện có phải là quản trị viên hệ thống DB (Table Editor) hay không
   v_is_db_admin := (current_user IN ('postgres', 'service_role', 'supabase_admin'));
+  
   v_current_auth_role := COALESCE(auth.role(), 'anon');
   v_current_user_email := COALESCE(auth.email(), '');
 
+  -- 1. Cấm hoàn toàn thao tác từ API ẩn danh (áp dụng cho tất cả trừ DB Admin)
   IF NOT v_is_db_admin AND v_current_auth_role = 'anon' THEN
     RAISE EXCEPTION 'BAO MAT CANH BAO: Nghiem cam tao, sua doi hoac xoa tai khoan tu API ben ngoai!';
   END IF;
 
+  -- Xác định quyền của người đang thực hiện thao tác (nếu qua API/App)
   IF NOT v_is_db_admin THEN
     SELECT upper(trim(role)) INTO v_operator_role
     FROM public.taikhoan
@@ -439,11 +318,14 @@ BEGIN
     v_operator_role := 'ADMIN';
   END IF;
 
+  -- 2. Xử lý khi XÓA tài khoản (DELETE)
   IF TG_OP = 'DELETE' THEN
-    IF lower(trim(OLD.username)) = 'admin' THEN
+    -- Cấm xóa tài khoản admin gốc (BỎ QUA nếu đang thao tác trên Table Editor)
+    IF NOT v_is_db_admin AND lower(trim(OLD.username)) = 'admin' THEN
       RAISE EXCEPTION 'BAO MAT: Nghiem cam xoa tai khoan Admin goc cua he thong!';
     END IF;
 
+    -- Chỉ ADMIN hoặc DB Admin mới được xóa tài khoản
     IF NOT v_is_db_admin AND (v_operator_role IS NULL OR v_operator_role <> 'ADMIN') THEN
       RAISE EXCEPTION 'BAO MAT: Ban khong co quyen xoa tai khoan!';
     END IF;
@@ -451,17 +333,21 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  -- 3. Xử lý khi THÊM (INSERT) hoặc SỬA (UPDATE)
   IF TG_OP IN ('INSERT', 'UPDATE') THEN
     v_target_role_upper := upper(trim(COALESCE(NEW.role, 'DV')));
 
-    IF TG_OP = 'UPDATE' AND lower(trim(OLD.username)) = 'admin' THEN
+    -- Cấm đổi tên hoặc hạ quyền tài khoản admin gốc (BỎ QUA nếu đang thao tác trên Table Editor)
+    IF NOT v_is_db_admin AND TG_OP = 'UPDATE' AND lower(trim(OLD.username)) = 'admin' THEN
       IF lower(trim(NEW.username)) <> 'admin' OR v_target_role_upper <> 'ADMIN' THEN
         RAISE EXCEPTION 'BAO MAT: Khong duoc phep doi ten hoac ha quyen cua tai khoan Admin goc!';
       END IF;
     END IF;
 
+    -- Cấm người dùng bình thường tự cấp quyền quản trị (ADMIN, BTV, BGH)
     IF v_target_role_upper IN ('ADMIN', 'BTV', 'BGH') THEN
       IF TG_OP = 'UPDATE' AND upper(trim(COALESCE(OLD.role, ''))) = v_target_role_upper THEN
+        -- Cho phép nếu giữ nguyên quyền cũ
         NULL;
       ELSIF NOT v_is_db_admin AND (v_operator_role IS NULL OR v_operator_role <> 'ADMIN') THEN
         RAISE EXCEPTION 'BAO MAT: Chi co Quan tri vien (Admin) moi co quyen cap quyen Quan tri (Admin/BTV/BGH)!';
@@ -543,7 +429,7 @@ CREATE FUNCTION public.get_auth_role() RETURNS text
     AS $$
   SELECT upper(trim(role)) 
   FROM public.taikhoan 
-  WHERE lower(username) = lower(split_part(coalesce(auth.email(), ''), '@', 1))
+  WHERE uid = auth.uid()
   LIMIT 1; 
 $$;
 
@@ -947,23 +833,28 @@ CREATE FUNCTION public.rpc_delete_auth_users_by_usernames(p_usernames text[]) RE
     SET search_path TO 'public', 'auth', 'extensions'
     AS $$
 DECLARE
-  v_uname text;
-  v_safe text;
-  v_emails text[] := '{}';
+  v_emails text[];
+  v_caller_role text;
 BEGIN
-  IF p_usernames IS NULL OR array_length(p_usernames, 1) IS NULL THEN
-    RETURN;
+  -- 1. KIỂM TRA ĐĂNG NHẬP (Chặn gọi trực tiếp từ bên ngoài mà không có token)
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: Vui lòng đăng nhập để thực hiện.';
   END IF;
 
-  FOREACH v_uname IN ARRAY p_usernames LOOP
-    v_safe := lower(regexp_replace(v_uname, '[^a-zA-Z0-9_.-]', '', 'g'));
-    IF v_safe <> '' THEN
-      v_emails := array_append(v_emails, v_safe || '@htqltd.vn');
-      v_emails := array_append(v_emails, v_safe || '@%');
-    END IF;
-  END LOOP;
+  -- 2. KIỂM TRA QUYỀN TRỊ VIÊN (Khớp tuyệt đối duy nhất bằng cột uid)
+  SELECT role INTO v_caller_role 
+  FROM public.taikhoan 
+  WHERE uid = auth.uid();
 
-  -- Xóa chính xác các người dùng tương ứng trong auth.users
+  IF UPPER(v_caller_role) IS DISTINCT FROM 'ADMIN' THEN
+    RAISE EXCEPTION 'Forbidden: Bạn không có quyền quản trị viên (Admin) để xóa người dùng.';
+  END IF;
+
+  -- 3. THỰC THI XÓA (Tìm các tài khoản tương ứng trong auth.users)
+  SELECT array_agg(email) INTO v_emails
+  FROM auth.users
+  WHERE email LIKE ANY (SELECT unnest(p_usernames) || '@%');
+
   DELETE FROM auth.users WHERE email = ANY(v_emails) OR email ILIKE ANY(v_emails);
 END;
 $$;
@@ -1094,6 +985,33 @@ $$;
 
 
 ALTER FUNCTION public.save_user_backup_codes(p_encrypted_codes text) OWNER TO postgres;
+
+--
+-- Name: trigger_update_login_stats(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.trigger_update_login_stats() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+  -- Chỉ chạy khi thời gian đăng nhập mới lớn hơn thời gian cũ
+  IF NEW.last_sign_in_at > COALESCE(OLD.last_sign_in_at, '1970-01-01'::timestamptz) THEN
+    
+    -- Cập nhật 1-1, bắt buộc khớp chính xác uid, không dùng bất cứ cơ chế dự phòng nào khác
+    UPDATE public.taikhoan
+    SET 
+        sl_dangnhap = COALESCE(sl_dangnhap, 0) + 1,
+        tg_truycap = NEW.last_sign_in_at
+    WHERE uid = NEW.id; 
+    
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.trigger_update_login_stats() OWNER TO postgres;
 
 --
 -- Name: update_likes_count(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -1955,7 +1873,8 @@ CREATE TABLE public.taikhoan (
     doanvien_id uuid,
     sl_dangnhap integer DEFAULT 0,
     tg_truycap timestamp with time zone,
-    chidoan1111 text
+    chidoan1111 text,
+    uid uuid
 );
 
 
@@ -2657,6 +2576,13 @@ CREATE INDEX idx_taikhoan_role ON public.taikhoan USING btree (role);
 
 
 --
+-- Name: idx_taikhoan_uid; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_taikhoan_uid ON public.taikhoan USING btree (uid);
+
+
+--
 -- Name: idx_taikhoan_username_lower; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -3121,6 +3047,14 @@ ALTER TABLE ONLY public.phancong
 
 
 --
+-- Name: taikhoan taikhoan_uid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.taikhoan
+    ADD CONSTRAINT taikhoan_uid_fkey FOREIGN KEY (uid) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
 -- Name: theodoi360 theodoi360_doan_vien_vi_pham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -3516,164 +3450,178 @@ ALTER TABLE public.vanban_doan ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.xet_thidua ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: activity_logs Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.activity_logs FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
+
+
+--
 -- Name: cauhinh_tieuchi_xet_thidua Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.cauhinh_tieuchi_xet_thidua FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.cauhinh_tieuchi_xet_thidua FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: chamdiem Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.chamdiem FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.chamdiem FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: doanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.doanvien FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.doanvien FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: dotptdoanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.dotptdoanvien FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.dotptdoanvien FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
+
+
+--
+-- Name: duytricsdl Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Đăng nhập được xem" ON public.duytricsdl FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: gio_hoc_tap Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.gio_hoc_tap FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.gio_hoc_tap FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: github_settings Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.github_settings FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.github_settings FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: namhoc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.namhoc FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.namhoc FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: phancong Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.phancong FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.phancong FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: phanquyen Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.phanquyen FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.phanquyen FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: ptdoanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.ptdoanvien FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.ptdoanvien FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: push_subscriptions Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.push_subscriptions TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.push_subscriptions FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: ql_baocao Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.ql_baocao FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.ql_baocao FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: ql_nop_bc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.ql_nop_bc FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.ql_nop_bc FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: qlchidoan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.qlchidoan FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.qlchidoan FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: settings Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.settings FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.settings FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: taikhoan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.taikhoan FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.taikhoan FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: theodoi360 Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.theodoi360 FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.theodoi360 FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: thongbao_hethong Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.thongbao_hethong FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.thongbao_hethong FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: thongbao_riengbiet Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: tieuchitd Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.tieuchitd FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.tieuchitd FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: tuanhoc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.tuanhoc FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.tuanhoc FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: vanban_doan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.vanban_doan FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.vanban_doan FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
 -- Name: xet_thidua Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
 --
 
-CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
@@ -3816,6 +3764,12 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 
 --
 -- Name: FUNCTION save_user_backup_codes(p_encrypted_codes text); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION trigger_update_login_stats(); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -4034,7 +3988,7 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 -- PostgreSQL database dump complete
 --
 
-\unrestrict iJ4zPVxDEURqeXsJd29Lyw2mKIaeYoRIUhcgKcYH3HEnL2pUUPcSIqdFtS7Dmi1
+\unrestrict LgxLBD0rh4kIHGlUYKfBnYnFgUcdPXpK0SonL4FD91DJqMTJLjwv6xaHN5eLTjH
 
 
 -- 1. Khởi tạo tài khoản quản trị
