@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict LgxLBD0rh4kIHGlUYKfBnYnFgUcdPXpK0SonL4FD91DJqMTJLjwv6xaHN5eLTjH
+\restrict fX1E8YigF1yFB3zuliJexVZueTb771EbyXI9rVBm0w8KcQAwJQ6Afvia9LawDIp
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -34,6 +34,221 @@ COMMENT ON SCHEMA public IS 'standard public schema';
 
 
 --
+-- Name: calculate_scores_advanced(uuid, uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid DEFAULT NULL::uuid, p_doanvien_id uuid DEFAULT NULL::uuid) RETURNS TABLE(doanvien_id uuid, diem_hk1 numeric, diem_hk2 numeric, diem_cn numeric)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+  v_diem_san NUMERIC;
+BEGIN
+  -- 1. ĐIỀU KIỆN TIÊN QUYẾT: BẮT BUỘC PHẢI TRUYỀN NĂM HỌC HIỆN TẠI
+  IF p_namhoc_id IS NULL THEN
+    RAISE EXCEPTION 'Lỗi nghiêm ngặt: Tham số p_namhoc_id (Năm học hiện tại) là bắt buộc và không được để trống!';
+  END IF;
+
+  -- 2. LẤY ĐIỂM SÀN CỦA ĐÚNG NĂM HỌC HIỆN TẠI TỪ BẢNG SETTINGS
+  SELECT COALESCE(diemsanhocky, 0) INTO v_diem_san 
+  FROM public.settings 
+  WHERE namhoc = p_namhoc_id 
+  LIMIT 1;
+
+  -- Nếu chưa thiết lập riêng theo năm học, lấy cấu hình chung của hệ thống
+  IF v_diem_san IS NULL THEN
+    SELECT COALESCE(diemsanhocky, 0) INTO v_diem_san 
+    FROM public.settings 
+    WHERE namhoc IS NULL 
+    LIMIT 1;
+  END IF;
+
+  IF v_diem_san IS NULL THEN
+    SELECT COALESCE(diemsanhocky, 0) INTO v_diem_san 
+    FROM public.settings 
+    LIMIT 1;
+  END IF;
+
+  IF v_diem_san IS NULL THEN
+    v_diem_san := 0;
+  END IF;
+
+  RETURN QUERY
+  -- 3. GOM NHÓM ĐIỂM VÀ LỌC CHẶT CHẼ THEO NĂM HỌC HIỆN TẠI
+  WITH ScoreSummary AS (
+    SELECT 
+      dv.id AS dv_id,
+      
+      -- Tổng điểm Cộng của riêng HỌC KỲ 1 trong đúng năm học hiện tại
+      COALESCE(SUM(
+        CASE 
+          WHEN (
+            REPLACE(REPLACE(LOWER(TRIM(COALESCE(cd.hocky, ''))), ' ', ''), '_', '') IN (
+              'hk1', 'hocky1', 'hocki1', 'hki', '1', 
+              'họckỳ1', 'họckì1', 'họckỳi', 'họckìi', 'kỳ1', 'kì1', 'ky1', 'ki1'
+            )
+            OR (
+              (LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%1%' OR LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%i')
+              AND LOWER(TRIM(COALESCE(cd.hocky, ''))) NOT LIKE '%ii%'
+              AND LOWER(TRIM(COALESCE(cd.hocky, ''))) NOT LIKE '%2%'
+            )
+          ) THEN COALESCE(cd.diemcong::NUMERIC, 0) 
+          ELSE 0 
+        END
+      ), 0) AS total_cong_hk1,
+      
+      -- Tổng điểm Trừ của riêng HỌC KỲ 1 trong đúng năm học hiện tại
+      COALESCE(SUM(
+        CASE 
+          WHEN (
+            REPLACE(REPLACE(LOWER(TRIM(COALESCE(cd.hocky, ''))), ' ', ''), '_', '') IN (
+              'hk1', 'hocky1', 'hocki1', 'hki', '1', 
+              'họckỳ1', 'họckì1', 'họckỳi', 'họckìi', 'kỳ1', 'kì1', 'ky1', 'ki1'
+            )
+            OR (
+              (LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%1%' OR LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%i')
+              AND LOWER(TRIM(COALESCE(cd.hocky, ''))) NOT LIKE '%ii%'
+              AND LOWER(TRIM(COALESCE(cd.hocky, ''))) NOT LIKE '%2%'
+            )
+          ) THEN COALESCE(cd.diemtru::NUMERIC, 0) 
+          ELSE 0 
+        END
+      ), 0) AS total_tru_hk1,
+      
+      -- Tổng điểm Cộng của riêng HỌC KỲ 2 trong đúng năm học hiện tại
+      COALESCE(SUM(
+        CASE 
+          WHEN (
+            REPLACE(REPLACE(LOWER(TRIM(COALESCE(cd.hocky, ''))), ' ', ''), '_', '') IN (
+              'hk2', 'hocky2', 'hocki2', 'hkii', '2', 
+              'họckỳ2', 'họckì2', 'họckỳii', 'họckìii', 'kỳ2', 'kì2', 'ky2', 'ki2'
+            )
+            OR (
+              LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%2%' 
+              OR LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%ii%'
+            )
+          ) THEN COALESCE(cd.diemcong::NUMERIC, 0) 
+          ELSE 0 
+        END
+      ), 0) AS total_cong_hk2,
+      
+      -- Tổng điểm Trừ của riêng HỌC KỲ 2 trong đúng năm học hiện tại
+      COALESCE(SUM(
+        CASE 
+          WHEN (
+            REPLACE(REPLACE(LOWER(TRIM(COALESCE(cd.hocky, ''))), ' ', ''), '_', '') IN (
+              'hk2', 'hocky2', 'hocki2', 'hkii', '2', 
+              'họckỳ2', 'họckì2', 'họckỳii', 'họckìii', 'kỳ2', 'kì2', 'ky2', 'ki2'
+            )
+            OR (
+              LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%2%' 
+              OR LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%ii%'
+            )
+          ) THEN COALESCE(cd.diemtru::NUMERIC, 0) 
+          ELSE 0 
+        END
+      ), 0) AS total_tru_hk2
+
+    -- BẢO VỆ 1: CHỈ LẤY ĐOÀN VIÊN THUỘC NĂM HỌC HIỆN TẠI (TUYỆT ĐỐI KHÔNG QUÉT NĂM CŨ)
+    FROM public.doanvien dv
+    
+    -- BẢO VỆ 2: LEFT JOIN ĐẢM BẢO 100% HỌC SINH KHÔNG BỊ MẤT DÒNG
+    -- VÀ CHỈ LẤY ĐIỂM CHẤM THUỘC NĂM HỌC HIỆN TẠI
+    LEFT JOIN public.chamdiem cd 
+           ON dv.id = cd.doanvienid 
+          AND cd.namhoc = p_namhoc_id
+           
+    WHERE 
+      -- ĐIỀU KIỆN TIÊN QUYẾT: LUÔN LUÔN VÀ DUY NHẤT TRONG NĂM HỌC ĐƯỢC CHỈ ĐỊNH
+      dv.namhoc = p_namhoc_id
+      
+      -- Phân quyền theo Chi đoàn quản lý (GVCN/BCH) nếu có chỉ định
+      AND (p_chidoan_id IS NULL OR dv.chidoan_id = p_chidoan_id)
+      
+      -- Phân quyền theo cá nhân Đoàn viên nếu là học sinh tự xem
+      AND (p_doanvien_id IS NULL OR dv.id = p_doanvien_id)
+      
+    GROUP BY dv.id
+  )
+  
+  -- 4. ÁP DỤNG CÔNG THỨC TOÁN HỌC NHẤT QUÁN 100% (CN = HK1 + HK2)
+  SELECT 
+    s.dv_id AS doanvien_id,
+    
+    -- HK1 = Điểm Sàn + Tổng Cộng HK1 - Tổng Trừ HK1
+    (v_diem_san + s.total_cong_hk1 - s.total_tru_hk1) AS diem_hk1,
+    
+    -- HK2 = Điểm Sàn + Tổng Cộng HK2 - Tổng Trừ HK2
+    (v_diem_san + s.total_cong_hk2 - s.total_tru_hk2) AS diem_hk2,
+    
+    -- CẢ NĂM = Đúng bằng HK1 + HK2 (Toán học nhất quán hoàn hảo)
+    ((v_diem_san * 2) + (s.total_cong_hk1 + s.total_cong_hk2) - (s.total_tru_hk1 + s.total_tru_hk2)) AS diem_cn
+    
+  FROM ScoreSummary s;
+END;
+$$;
+
+
+ALTER FUNCTION public.calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid, p_doanvien_id uuid) OWNER TO postgres;
+
+--
+-- Name: calculate_scores_by_year(uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.calculate_scores_by_year(p_namhoc_id uuid) RETURNS TABLE(doanvien_id uuid, diem_hk1 numeric, diem_hk2 numeric, diem_cn numeric)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+DECLARE
+    v_diemsan numeric;
+BEGIN
+    -- Lấy điểm sàn
+    SELECT COALESCE(diemsanhocky, 0) INTO v_diemsan
+    FROM public.settings
+    LIMIT 1;
+
+    IF v_diemsan IS NULL THEN
+        v_diemsan := 0;
+    END IF;
+
+    RETURN QUERY
+    WITH raw_scores AS (
+        SELECT
+            cd.doanvienid,
+            CASE WHEN upper(trim(cd.hocky)) IN ('HK1', 'HỌC KỲ 1', 'HỌC KÌ 1', 'HK I', 'HKI', 'HỌC KỲ I', 'HỌC KÌ I', '1') 
+                 THEN COALESCE(cd.diemcong, 0) ELSE 0 END AS hk1_cong,
+            CASE WHEN upper(trim(cd.hocky)) IN ('HK1', 'HỌC KỲ 1', 'HỌC KÌ 1', 'HK I', 'HKI', 'HỌC KỲ I', 'HỌC KÌ I', '1') 
+                 THEN COALESCE(cd.diemtru, 0) ELSE 0 END AS hk1_tru,
+                 
+            CASE WHEN upper(trim(cd.hocky)) IN ('HK2', 'HỌC KỲ 2', 'HỌC KÌ 2', 'HK II', 'HKII', 'HỌC KỲ II', 'HỌC KÌ II', '2') 
+                 THEN COALESCE(cd.diemcong, 0) ELSE 0 END AS hk2_cong,
+            CASE WHEN upper(trim(cd.hocky)) IN ('HK2', 'HỌC KỲ 2', 'HỌC KÌ 2', 'HK II', 'HKII', 'HỌC KỲ II', 'HỌC KÌ II', '2') 
+                 THEN COALESCE(cd.diemtru, 0) ELSE 0 END AS hk2_tru
+        FROM public.chamdiem cd
+        WHERE cd.namhoc = p_namhoc_id
+    ),
+    aggregated AS (
+        SELECT
+            r.doanvienid,
+            SUM(r.hk1_cong) AS sum_hk1_cong,
+            SUM(r.hk1_tru) AS sum_hk1_tru,
+            SUM(r.hk2_cong) AS sum_hk2_cong,
+            SUM(r.hk2_tru) AS sum_hk2_tru
+        FROM raw_scores r
+        GROUP BY r.doanvienid
+    )
+    SELECT
+        a.doanvienid,
+        (v_diemsan + a.sum_hk1_cong - a.sum_hk1_tru) AS diem_hk1,
+        (v_diemsan + a.sum_hk2_cong - a.sum_hk2_tru) AS diem_hk2,
+        ((v_diemsan + a.sum_hk1_cong - a.sum_hk1_tru) + (v_diemsan + a.sum_hk2_cong - a.sum_hk2_tru)) AS diem_cn
+    FROM aggregated a
+    WHERE a.doanvienid IS NOT NULL;
+END;
+$$;
+
+
+ALTER FUNCTION public.calculate_scores_by_year(p_namhoc_id uuid) OWNER TO postgres;
+
+--
 -- Name: check_user_mfa_status(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
@@ -49,6 +264,98 @@ $$;
 
 
 ALTER FUNCTION public.check_user_mfa_status() OWNER TO postgres;
+
+--
+-- Name: fn_dem_du_lieu_lien_quan_tuan(uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $$
+DECLARE
+  v_rec_tuan record;
+  v_count_phancong integer := 0;
+  v_count_chamdiem integer := 0;
+  v_count_giohoctap integer := 0;
+  v_count_theodoi360 integer := 0;
+  v_tuan_num text;
+BEGIN
+  -- 1. Lấy thông tin tuần và kiểm tra chéo năm học
+  SELECT th.id, th.namhoc, th.hocky, th.tuan, th.tungay, th.denngay, th.islocked, nh.tennamhoc
+  INTO v_rec_tuan
+  FROM public.tuanhoc th
+  LEFT JOIN public.namhoc nh ON nh.id = th.namhoc
+  WHERE th.id = p_tuan_id AND th.namhoc = p_namhoc_id;
+
+  IF v_rec_tuan.id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Tuần học không tồn tại hoặc không thuộc năm học đã chỉ định!'
+    );
+  END IF;
+
+  v_tuan_num := regexp_replace(COALESCE(v_rec_tuan.tuan, ''), '[^0-9]', '', 'g');
+
+  -- 2. Đếm số bản ghi phân công chấm chéo
+  SELECT count(*) INTO v_count_phancong
+  FROM public.phancong pc
+  WHERE pc.namhoc = p_namhoc_id
+    AND (TRIM(pc.hocky) = TRIM(v_rec_tuan.hocky) OR pc.hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+    AND (
+      TRIM(pc.tuan) = TRIM(v_rec_tuan.tuan) 
+      OR (v_tuan_num <> '' AND regexp_replace(pc.tuan, '[^0-9]', '', 'g') = v_tuan_num)
+    );
+
+  -- 3. Đếm số bản ghi phiếu chấm điểm thi đua
+  SELECT count(*) INTO v_count_chamdiem
+  FROM public.chamdiem cd
+  WHERE cd.namhoc = p_namhoc_id
+    AND (TRIM(cd.hocky) = TRIM(v_rec_tuan.hocky) OR cd.hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+    AND (
+      TRIM(cd.tuan) = TRIM(v_rec_tuan.tuan) 
+      OR (v_tuan_num <> '' AND regexp_replace(cd.tuan, '[^0-9]', '', 'g') = v_tuan_num)
+    );
+
+  -- 4. Đếm số bản ghi giờ học tốt (bảng gio_hoc_tap) - Bọc Try Catch để tránh lỗi db structure
+  BEGIN
+    SELECT count(*) INTO v_count_giohoctap
+    FROM public.gio_hoc_tap gh
+    WHERE gh.namhoc_id = p_namhoc_id AND gh.tuan_id = p_tuan_id;
+  EXCEPTION WHEN OTHERS THEN
+    v_count_giohoctap := 0;
+  END;
+
+  -- 5. Đếm số bản ghi theo dõi 360 - Bọc Try Catch để tránh lỗi db structure
+  BEGIN
+    SELECT count(*) INTO v_count_theodoi360
+    FROM public.theodoi360 td
+    WHERE td.nam_hoc_id = p_namhoc_id AND td.tuan_id = p_tuan_id;
+  EXCEPTION WHEN OTHERS THEN
+    v_count_theodoi360 := 0;
+  END;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'tuan_id', v_rec_tuan.id,
+    'tuan', v_rec_tuan.tuan,
+    'hocky', v_rec_tuan.hocky,
+    'namhoc_id', p_namhoc_id,
+    'tennamhoc', COALESCE(v_rec_tuan.tennamhoc, 'Không xác định'),
+    'tungay', v_rec_tuan.tungay,
+    'denngay', v_rec_tuan.denngay,
+    'islocked', v_rec_tuan.islocked,
+    'so_phan_cong', v_count_phancong,
+    'so_cham_diem', v_count_chamdiem,
+    'so_gio_hoc_tap', v_count_giohoctap,
+    'so_theodoi360', v_count_theodoi360,
+    'tong_ban_ghi', (v_count_phancong + v_count_chamdiem + v_count_giohoctap + v_count_theodoi360 + 1)
+  );
+END;
+$$;
+
+
+ALTER FUNCTION public.fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid) OWNER TO postgres;
 
 --
 -- Name: fn_dong_bo_taikhoan_sang_auth_users(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -365,6 +672,173 @@ $$;
 ALTER FUNCTION public.fn_kiem_tra_an_ninh_taikhoan() OWNER TO postgres;
 
 --
+-- Name: fn_kiem_tra_va_khoa_tuan(uuid, text, text, boolean); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid DEFAULT NULL::uuid, p_hocky text DEFAULT NULL::text, p_tuan text DEFAULT NULL::text, p_force boolean DEFAULT false) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $$
+BEGIN
+  RETURN public.fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong();
+END;
+$$;
+
+
+ALTER FUNCTION public.fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid, p_hocky text, p_tuan text, p_force boolean) OWNER TO postgres;
+
+--
+-- Name: fn_kiem_tra_xu_phat_tuan_thu_cong(text, text, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text DEFAULT NULL::text, p_namhoc_id uuid DEFAULT NULL::uuid) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $$
+DECLARE
+    v_namhoc_id uuid;
+    v_tennamhoc text;
+    v_diem_tru numeric;
+    v_tieu_chi text;
+    v_nguoi_bao_cao text;
+    v_tuan RECORD;
+    v_lop_vi_pham RECORD;
+    v_so_lop_bi_phat int := 0;
+    v_penalized_list jsonb := '[]'::jsonb;
+BEGIN
+    -- 1. Xác định CHÍNH XÁC Năm học
+    IF p_namhoc_id IS NOT NULL THEN
+        SELECT id, tennamhoc INTO v_namhoc_id, v_tennamhoc 
+        FROM public.namhoc 
+        WHERE id = p_namhoc_id 
+        LIMIT 1;
+    ELSE
+        SELECT id, tennamhoc INTO v_namhoc_id, v_tennamhoc 
+        FROM public.namhoc 
+        WHERE isdefault = true 
+        LIMIT 1;
+    END IF;
+
+    IF v_namhoc_id IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Không tìm thấy năm học hợp lệ trong hệ thống.');
+    END IF;
+
+    -- 2. 100% ĐỌC CẤU HÌNH TỪ BẢNG SETTINGS CỦA CHÍNH NĂM HỌC NÀY
+    SELECT 
+        autopenaltypoints,
+        autopenaltycriteria,
+        autopenaltyreporter
+    INTO 
+        v_diem_tru, 
+        v_tieu_chi, 
+        v_nguoi_bao_cao
+    FROM public.settings
+    WHERE namhoc = v_namhoc_id
+    LIMIT 1;
+
+    -- Nếu bảng settings chưa cấu hình hoặc thông số bị để trống -> Báo lỗi ngay lập tức
+    IF v_diem_tru IS NULL OR v_tieu_chi IS NULL OR v_nguoi_bao_cao IS NULL THEN
+        RETURN jsonb_build_object(
+            'success', false, 
+            'message', 'Chưa có cấu hình thông số xử phạt trong bảng settings cho năm học: ' || COALESCE(v_tennamhoc, '') || '. Vui lòng lưu cấu hình trước khi xử phạt.'
+        );
+    END IF;
+
+    -- 3. Tìm thông tin tuần của CHÍNH XÁC năm học này
+    SELECT id, tuan, hocky, tungay, denngay, islocked
+    INTO v_tuan
+    FROM public.tuanhoc
+    WHERE namhoc = v_namhoc_id 
+      AND (TRIM(tuan) = TRIM(p_tuan) OR regexp_replace(tuan, '[^0-9]', '', 'g') = regexp_replace(p_tuan, '[^0-9]', '', 'g'))
+      AND (p_hocky IS NULL OR hocky = p_hocky)
+    LIMIT 1;
+
+    IF v_tuan.id IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Không tìm thấy thông tin Tuần ' || p_tuan || ' trong năm học ' || COALESCE(v_tennamhoc, ''));
+    END IF;
+
+    IF v_tuan.islocked IS NOT TRUE THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Tuần ' || p_tuan || ' chưa bị khóa. Vui lòng khóa tuần trước khi xử phạt.');
+    END IF;
+
+    -- 4. Quét tìm và xử phạt các lớp chưa nộp bài của ĐÚNG năm học này
+    FOR v_lop_vi_pham IN
+        WITH lop_co_nghia_vu AS (
+            SELECT DISTINCT pc.lopcham AS chidoan_id
+            FROM public.phancong pc
+            WHERE pc.namhoc = v_namhoc_id
+              AND (TRIM(pc.tuan) = TRIM(v_tuan.tuan) OR regexp_replace(pc.tuan, '[^0-9]', '', 'g') = regexp_replace(v_tuan.tuan, '[^0-9]', '', 'g'))
+              AND (TRIM(pc.hocky) = TRIM(v_tuan.hocky) OR pc.hocky ILIKE '%' || v_tuan.hocky || '%')
+              AND pc.lopcham IS NOT NULL
+        ),
+        lop_da_nop_phieu AS (
+            SELECT DISTINCT cd.lopcham AS chidoan_id
+            FROM public.chamdiem cd
+            WHERE cd.namhoc = v_namhoc_id
+              AND (TRIM(cd.tuan) = TRIM(v_tuan.tuan) OR regexp_replace(cd.tuan, '[^0-9]', '', 'g') = regexp_replace(v_tuan.tuan, '[^0-9]', '', 'g'))
+              AND (TRIM(cd.hocky) = TRIM(v_tuan.hocky) OR cd.hocky ILIKE '%' || v_tuan.hocky || '%')
+              AND (cd.matieuchi IS DISTINCT FROM 'TUDONG')
+              AND cd.lopcham IS NOT NULL
+        ),
+        lop_da_bi_phat AS (
+            SELECT DISTINCT COALESCE(cd.chamlop, cd.chidoan_id) AS chidoan_id
+            FROM public.chamdiem cd
+            WHERE cd.namhoc = v_namhoc_id
+              AND (TRIM(cd.tuan) = TRIM(v_tuan.tuan) OR regexp_replace(cd.tuan, '[^0-9]', '', 'g') = regexp_replace(v_tuan.tuan, '[^0-9]', '', 'g'))
+              AND (TRIM(cd.hocky) = TRIM(v_tuan.hocky) OR cd.hocky ILIKE '%' || v_tuan.hocky || '%')
+              AND (cd.matieuchi = 'TUDONG' OR cd.nguoicham = v_nguoi_bao_cao)
+        )
+        SELECT 
+            nv.chidoan_id,
+            COALESCE(qd.tenchidoan, 'Chi đoàn') AS ten_chi_doan
+        FROM lop_co_nghia_vu nv
+        LEFT JOIN public.qlchidoan qd ON qd.id = nv.chidoan_id
+        WHERE nv.chidoan_id NOT IN (SELECT chidoan_id FROM lop_da_nop_phieu)
+          AND nv.chidoan_id NOT IN (SELECT chidoan_id FROM lop_da_bi_phat)
+    LOOP
+        INSERT INTO public.chamdiem (
+            id, namhoc, hocky, tuan, thu, ngay,
+            lopcham, chamlop, chidoan_id, doanvienid, hotendoanvien,
+            matieuchi, tentieuchi, loaitieuchi, diemtru, diemcong,
+            ghichu, nguoicham, createdat, updatedat
+        ) VALUES (
+            gen_random_uuid()::text, v_namhoc_id, v_tuan.hocky, v_tuan.tuan, 'Chủ nhật', v_tuan.denngay,
+            NULL, v_lop_vi_pham.chidoan_id, v_lop_vi_pham.chidoan_id, NULL, v_lop_vi_pham.ten_chi_doan,
+            'TUDONG', v_tieu_chi, 'Trừ điểm', v_diem_tru, 0,
+            'Hệ thống tự động phạt lớp ' || v_lop_vi_pham.ten_chi_doan || ' do không nộp phiếu chấm điểm trong tuần ' || v_tuan.tuan,
+            v_nguoi_bao_cao, NOW(), NOW()
+        );
+
+        v_so_lop_bi_phat := v_so_lop_bi_phat + 1;
+        v_penalized_list := v_penalized_list || jsonb_build_object(
+            'lop_id', v_lop_vi_pham.chidoan_id,
+            'ten_lop', v_lop_vi_pham.ten_chi_doan,
+            'tuan', v_tuan.tuan,
+            'diemtru', v_diem_tru,
+            'tieuchi', v_tieu_chi,
+            'nguoibao', v_nguoi_bao_cao
+        );
+    END LOOP;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'namhoc', v_tennamhoc,
+        'so_lop_bi_phat', v_so_lop_bi_phat,
+        'danh_sach_lop_bi_phat', v_penalized_list,
+        'thong_so_ap_dung', jsonb_build_object(
+            'diem_tru', v_diem_tru,
+            'tieu_chi', v_tieu_chi,
+            'nguoi_bao_cao', v_nguoi_bao_cao
+        ),
+        'message', 'Đã hoàn tất xử phạt tuần ' || p_tuan || ' (Tổng số lớp bị phạt: ' || v_so_lop_bi_phat || ')'
+    );
+END;
+$$;
+
+
+ALTER FUNCTION public.fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text, p_namhoc_id uuid) OWNER TO postgres;
+
+--
 -- Name: fn_tu_dong_bam_mat_khau_taikhoan(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
@@ -387,6 +861,1057 @@ $_$;
 
 
 ALTER FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() OWNER TO postgres;
+
+--
+-- Name: fn_tu_dong_khoa_tuan(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_tu_dong_khoa_tuan() RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $$
+DECLARE
+  v_now_vn timestamp;
+  v_today_date date;
+  v_today_str text;
+  v_target_namhoc_id uuid;
+  v_target_tennamhoc text;
+  v_rec record;
+  v_raw_denngay text;
+  v_denngay_formatted text;
+  v_denngay_date date;
+  v_should_lock boolean;
+  v_reason text;
+  v_locked_count integer := 0;
+  v_details jsonb := '[]'::jsonb;
+  v_parts text[];
+BEGIN
+  -- 1. Lấy ngày giờ hiện tại chuẩn múi giờ Việt Nam (UTC+7)
+  v_now_vn := now() AT TIME ZONE 'Asia/Ho_Chi_Minh';
+  v_today_date := v_now_vn::date;
+  v_today_str := to_char(v_now_vn, 'YYYY-MM-DD');
+
+  -- 2. Xác định duy nhất 1 năm học mặc định (isdefault = true)
+  SELECT id, tennamhoc INTO v_target_namhoc_id, v_target_tennamhoc
+  FROM public.namhoc
+  WHERE isdefault = true
+  LIMIT 1;
+
+  IF v_target_namhoc_id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'so_tuan_da_khoa', 0,
+      'message', 'Không tìm thấy năm học mặc định. Dừng để bảo vệ dữ liệu.'
+    );
+  END IF;
+
+  -- 3. Duyệt toàn bộ các tuần của năm học mặc định
+  FOR v_rec IN
+    SELECT 
+      th.id,
+      th.namhoc,
+      th.hocky,
+      th.tuan,
+      th.tungay,
+      th.denngay,
+      th.islocked
+    FROM public.tuanhoc th
+    WHERE th.namhoc = v_target_namhoc_id
+    ORDER BY th.hocky, th.tuan::integer ASC NULLS LAST
+  LOOP
+    v_should_lock := false;
+    v_reason := '';
+    v_denngay_formatted := '';
+    v_denngay_date := NULL;
+    v_raw_denngay := TRIM(COALESCE(v_rec.denngay, ''));
+
+    -- Chuẩn hóa ngày kết thúc về dạng YYYY-MM-DD
+    IF v_raw_denngay ~ '^\d{4}-\d{1,2}-\d{1,2}' THEN
+      v_parts := string_to_array(SUBSTRING(v_raw_denngay FROM '^\d{4}-\d{1,2}-\d{1,2}'), '-');
+      v_denngay_formatted := v_parts[1] || '-' || LPAD(v_parts[2], 2, '0') || '-' || LPAD(v_parts[3], 2, '0');
+    ELSIF v_raw_denngay ~ '^\d{1,2}/\d{1,2}/\d{4}' THEN
+      v_parts := string_to_array(SUBSTRING(v_raw_denngay FROM '^\d{1,2}/\d{1,2}/\d{4}'), '/');
+      v_denngay_formatted := v_parts[3] || '-' || LPAD(v_parts[2], 2, '0') || '-' || LPAD(v_parts[1], 2, '0');
+    ELSIF v_raw_denngay ~ '^\d{1,2}-\d{1,2}-\d{4}' THEN
+      v_parts := string_to_array(SUBSTRING(v_raw_denngay FROM '^\d{1,2}-\d{1,2}-\d{4}'), '-');
+      v_denngay_formatted := v_parts[3] || '-' || LPAD(v_parts[2], 2, '0') || '-' || LPAD(v_parts[1], 2, '0');
+    END IF;
+
+    -- Chuyển đổi an toàn sang kiểu DATE
+    BEGIN
+      IF v_denngay_formatted <> '' THEN
+        v_denngay_date := v_denngay_formatted::date;
+      END IF;
+    EXCEPTION WHEN OTHERS THEN
+      v_denngay_date := NULL;
+    END;
+
+    -- =========================================================================
+    -- ĐIỀU KIỆN KHÓA TUẦN:
+    -- Khóa tất cả các tuần đã qua ngày kết thúc (denngay < today) mà chưa khóa.
+    -- Tuyệt đối KHÔNG khóa nếu denngay >= today (ngày hôm nay hoặc tương lai).
+    -- TUYỆT ĐỐI KHÔNG XỬ PHẠT (không ghi nhận bất kỳ điểm phạt nào vào chamdiem).
+    -- =========================================================================
+    IF v_denngay_date IS NOT NULL AND v_denngay_date < v_today_date THEN
+      v_reason := 'Tuần đã hết hạn (' || v_denngay_formatted || ' < ' || v_today_str || ').';
+      IF v_rec.islocked IS FALSE OR v_rec.islocked IS NULL THEN
+        v_should_lock := true;
+        UPDATE public.tuanhoc
+        SET islocked = true, updatedat = now()
+        WHERE id = v_rec.id;
+        v_locked_count := v_locked_count + 1;
+      END IF;
+    ELSE
+      v_reason := 'Chưa qua ngày kết thúc (vẫn mở).';
+    END IF;
+
+    v_details := v_details || jsonb_build_object(
+      'tuan', v_rec.tuan,
+      'hocky', v_rec.hocky,
+      'denngay_chuan', v_denngay_formatted,
+      'da_khoa', (v_rec.islocked = TRUE OR v_should_lock),
+      'ly_do', v_reason
+    );
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'namhoc_hien_tai', v_target_tennamhoc,
+    'so_tuan_da_khoa', v_locked_count,
+    'thoi_gian_hien_tai_vn', to_char(v_now_vn, 'YYYY-MM-DD HH24:MI:SS'),
+    'chi_tiet_kiem_tra', v_details
+  );
+END;
+$$;
+
+
+ALTER FUNCTION public.fn_tu_dong_khoa_tuan() OWNER TO postgres;
+
+--
+-- Name: fn_tu_dong_khoa_tuan_va_xu_phat(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat() RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $_$
+DECLARE
+  v_now_vn timestamp;
+  v_today_date date;
+  v_today_str text;
+  v_time_str text;
+  v_target_namhoc_id uuid;
+  v_target_tennamhoc text;
+  v_rec record;
+  v_raw_denngay text;
+  v_denngay_formatted text;
+  v_denngay_date date;
+  v_auto_enabled boolean := true;
+  v_penalty_points numeric := 10;
+  v_penalty_criteria text := 'Lỗi không nộp phiếu chấm điểm tuần';
+  v_penalty_reporter text := 'Hệ thống tự động';
+  v_should_lock boolean;
+  v_is_past_due boolean;
+  v_reason text;
+  v_locked_count integer := 0;
+  v_penalized_classes_count integer := 0;
+  v_penalized_list jsonb := '[]'::jsonb;
+  v_details jsonb := '[]'::jsonb;
+  v_pc_rec record;
+  v_da_nop boolean;
+  v_da_bi_phat boolean;
+  v_tenchidoan text;
+  v_parts text[];
+  v_num_pc integer;
+  v_num_rec integer;
+  
+  -- Các biến bổ sung cho Thuật toán tự động kích hoạt Tuần Mặc Định
+  v_new_default_tuan_id uuid := NULL;
+  v_new_default_tuan_ten text := '';
+BEGIN
+  -- Lấy ngày giờ hiện tại chuẩn múi giờ Việt Nam (UTC+7)
+  v_now_vn := now() AT TIME ZONE 'Asia/Ho_Chi_Minh';
+  v_today_date := v_now_vn::date;
+  v_today_str := to_char(v_now_vn, 'YYYY-MM-DD');
+  v_time_str := to_char(v_now_vn, 'HH24:MI');
+
+  -- 1. Xác định duy nhất 1 năm học mặc định (isdefault = true)
+  SELECT id, tennamhoc INTO v_target_namhoc_id, v_target_tennamhoc
+  FROM public.namhoc
+  WHERE isdefault = true
+  LIMIT 1;
+
+  IF v_target_namhoc_id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'so_tuan_da_khoa', 0,
+      'so_lop_bi_phat', 0,
+      'message', 'Không tìm thấy năm học mặc định. Dừng để bảo vệ dữ liệu.'
+    );
+  END IF;
+
+  -- =========================================================================
+  -- TÍNH NĂNG: TỰ ĐỘNG TÌM & KÍCH HOẠT TUẦN MẶC ĐỊNH (Bọc TRIM chống rác khoảng trắng)
+  -- =========================================================================
+  WITH parsed_weeks AS (
+    SELECT 
+      id, tuan, isdefault,
+      CASE 
+        WHEN TRIM(COALESCE(tungay, '')) ~ '^\d{4}-\d{1,2}-\d{1,2}' THEN (string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{4}-\d{1,2}-\d{1,2}'), '-'))[1] || '-' || LPAD((string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{4}-\d{1,2}-\d{1,2}'), '-'))[2], 2, '0') || '-' || LPAD((string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{4}-\d{1,2}-\d{1,2}'), '-'))[3], 2, '0')
+        WHEN TRIM(COALESCE(tungay, '')) ~ '^\d{1,2}/\d{1,2}/\d{4}' THEN (string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{1,2}/\d{1,2}/\d{4}'), '/'))[3] || '-' || LPAD((string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{1,2}/\d{1,2}/\d{4}'), '/'))[2], 2, '0') || '-' || LPAD((string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{1,2}/\d{1,2}/\d{4}'), '/'))[1], 2, '0')
+        WHEN TRIM(COALESCE(tungay, '')) ~ '^\d{1,2}-\d{1,2}-\d{4}' THEN (string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{1,2}-\d{1,2}-\d{4}'), '-'))[3] || '-' || LPAD((string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{1,2}-\d{1,2}-\d{4}'), '-'))[2], 2, '0') || '-' || LPAD((string_to_array(SUBSTRING(TRIM(tungay) FROM '^\d{1,2}-\d{1,2}-\d{4}'), '-'))[1], 2, '0')
+        ELSE NULL
+      END::date AS tungay_date,
+      CASE 
+        WHEN TRIM(COALESCE(denngay, '')) ~ '^\d{4}-\d{1,2}-\d{1,2}' THEN (string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{4}-\d{1,2}-\d{1,2}'), '-'))[1] || '-' || LPAD((string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{4}-\d{1,2}-\d{1,2}'), '-'))[2], 2, '0') || '-' || LPAD((string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{4}-\d{1,2}-\d{1,2}'), '-'))[3], 2, '0')
+        WHEN TRIM(COALESCE(denngay, '')) ~ '^\d{1,2}/\d{1,2}/\d{4}' THEN (string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{1,2}/\d{1,2}/\d{4}'), '/'))[3] || '-' || LPAD((string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{1,2}/\d{1,2}/\d{4}'), '/'))[2], 2, '0') || '-' || LPAD((string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{1,2}/\d{1,2}/\d{4}'), '/'))[1], 2, '0')
+        WHEN TRIM(COALESCE(denngay, '')) ~ '^\d{1,2}-\d{1,2}-\d{4}' THEN (string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{1,2}-\d{1,2}-\d{4}'), '-'))[3] || '-' || LPAD((string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{1,2}-\d{1,2}-\d{4}'), '-'))[2], 2, '0') || '-' || LPAD((string_to_array(SUBSTRING(TRIM(denngay) FROM '^\d{1,2}-\d{1,2}-\d{4}'), '-'))[1], 2, '0')
+        ELSE NULL
+      END::date AS denngay_date
+    FROM public.tuanhoc
+    WHERE namhoc = v_target_namhoc_id
+  )
+  SELECT id, tuan INTO v_new_default_tuan_id, v_new_default_tuan_ten
+  FROM parsed_weeks
+  WHERE 
+    (tungay_date <= v_today_date AND denngay_date >= v_today_date) OR (denngay_date < v_today_date)
+  ORDER BY 
+    CASE 
+      WHEN (tungay_date <= v_today_date AND denngay_date >= v_today_date) THEN 1 
+      ELSE 2 
+    END ASC,
+    tungay_date DESC NULLS LAST,
+    denngay_date DESC NULLS LAST
+  LIMIT 1;
+
+  -- Cập nhật cờ isdefault (Chống ghi đè vô ích: Chỉ update nếu tuần đó CHƯA phải là mặc định)
+  IF v_new_default_tuan_id IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM public.tuanhoc WHERE id = v_new_default_tuan_id AND isdefault = true) THEN
+      UPDATE public.tuanhoc SET isdefault = false WHERE namhoc = v_target_namhoc_id AND isdefault = true;
+      UPDATE public.tuanhoc SET isdefault = true WHERE id = v_new_default_tuan_id;
+    END IF;
+  END IF;
+  -- =========================================================================
+
+  -- 2. Lấy cấu hình phạt của năm học mặc định
+  SELECT 
+    COALESCE(autopenaltyenabled, true),
+    COALESCE(autopenaltypoints, 10),
+    COALESCE(autopenaltycriteria, 'Lỗi không nộp phiếu chấm điểm tuần'),
+    COALESCE(autopenaltyreporter, 'Hệ thống tự động')
+  INTO 
+    v_auto_enabled,
+    v_penalty_points,
+    v_penalty_criteria,
+    v_penalty_reporter
+  FROM public.settings
+  WHERE namhoc = v_target_namhoc_id OR namhoc IS NULL
+  ORDER BY (namhoc = v_target_namhoc_id) DESC, updatedat DESC NULLS LAST
+  LIMIT 1;
+
+  -- 3. Duyệt các tuần của năm học hiện tại
+  FOR v_rec IN
+    SELECT 
+      th.id,
+      th.namhoc,
+      th.hocky,
+      th.tuan,
+      th.tungay,
+      th.denngay,
+      th.islocked
+    FROM public.tuanhoc th
+    WHERE th.namhoc = v_target_namhoc_id
+    ORDER BY th.hocky, th.tuan::integer ASC NULLS LAST
+  LOOP
+    v_should_lock := false;
+    v_is_past_due := false;
+    v_reason := '';
+    v_denngay_formatted := '';
+    v_denngay_date := NULL;
+    v_raw_denngay := TRIM(COALESCE(v_rec.denngay, ''));
+
+    -- Chuẩn hóa ngày kết thúc
+    IF v_raw_denngay ~ '^\d{4}-\d{1,2}-\d{1,2}' THEN
+      v_parts := string_to_array(SUBSTRING(v_raw_denngay FROM '^\d{4}-\d{1,2}-\d{1,2}'), '-');
+      v_denngay_formatted := v_parts[1] || '-' || LPAD(v_parts[2], 2, '0') || '-' || LPAD(v_parts[3], 2, '0');
+    ELSIF v_raw_denngay ~ '^\d{1,2}/\d{1,2}/\d{4}' THEN
+      v_parts := string_to_array(SUBSTRING(v_raw_denngay FROM '^\d{1,2}/\d{1,2}/\d{4}'), '/');
+      v_denngay_formatted := v_parts[3] || '-' || LPAD(v_parts[2], 2, '0') || '-' || LPAD(v_parts[1], 2, '0');
+    ELSIF v_raw_denngay ~ '^\d{1,2}-\d{1,2}-\d{4}' THEN
+      v_parts := string_to_array(SUBSTRING(v_raw_denngay FROM '^\d{1,2}-\d{1,2}-\d{4}'), '-');
+      v_denngay_formatted := v_parts[3] || '-' || LPAD(v_parts[2], 2, '0') || '-' || LPAD(v_parts[1], 2, '0');
+    END IF;
+
+    -- Chuyển đổi an toàn sang kiểu DATE
+    BEGIN
+      IF v_denngay_formatted <> '' THEN
+        v_denngay_date := v_denngay_formatted::date;
+      END IF;
+    EXCEPTION WHEN OTHERS THEN
+      v_denngay_date := NULL;
+    END;
+
+    -- =========================================================================
+    -- ĐIỀU KIỆN 1: KHÓA TUẦN CŨ
+    -- =========================================================================
+    IF v_denngay_date IS NOT NULL AND v_denngay_date < v_today_date THEN
+      IF v_rec.islocked IS FALSE OR v_rec.islocked IS NULL THEN
+        v_should_lock := true;
+        UPDATE public.tuanhoc
+        SET islocked = true, updatedat = now()
+        WHERE id = v_rec.id;
+        v_locked_count := v_locked_count + 1;
+      END IF;
+    END IF;
+
+    -- =========================================================================
+    -- ĐIỀU KIỆN 2: XÁC ĐỊNH TUẦN BỊ PHẠT (TRONG VÒNG 7 NGÀY QUA)
+    -- =========================================================================
+    IF v_denngay_date IS NOT NULL 
+       AND v_denngay_date < v_today_date 
+       AND v_denngay_date >= (v_today_date - INTERVAL '7 days')::date THEN
+      v_is_past_due := true;
+      IF v_auto_enabled IS TRUE THEN
+        v_reason := 'Tuần kết thúc trong vòng 7 ngày gần nhất (' || v_denngay_formatted || ' < ' || v_today_str || ').';
+      ELSE
+        v_reason := 'Tuần kết thúc trong vòng 7 ngày gần nhất (' || v_denngay_formatted || ' < ' || v_today_str || ') [Cấu hình tự động phạt đang TẮT - Không phạt].';
+      END IF;
+    ELSE
+      v_is_past_due := false;
+      v_reason := CASE 
+        WHEN v_denngay_date IS NOT NULL AND v_denngay_date < (v_today_date - INTERVAL '7 days')::date 
+          THEN 'Tuần cũ đã qua hơn 7 ngày (đã khóa, không phạt)'
+        ELSE 'Chưa qua ngày kết thúc (vẫn mở)'
+      END;
+    END IF;
+
+    -- =========================================================================
+    -- ĐIỀU KIỆN 3: XỬ PHẠT (An toàn kiểu số nguyên 01 = 1)
+    -- =========================================================================
+    IF v_is_past_due AND v_auto_enabled = TRUE THEN
+      -- Parse số tuần an toàn
+      BEGIN
+        v_num_rec := NULLIF(regexp_replace(v_rec.tuan, '[^0-9]', '', 'g'), '')::integer;
+      EXCEPTION WHEN OTHERS THEN
+        v_num_rec := NULL;
+      END;
+
+      FOR v_pc_rec IN
+        SELECT DISTINCT pc.lopcham, pc.tuan AS pc_tuan
+        FROM public.phancong pc
+        WHERE (pc.namhoc = v_target_namhoc_id OR pc.namhoc IS NULL)
+          AND (TRIM(pc.hocky) = TRIM(v_rec.hocky) OR pc.hocky ILIKE '%' || v_rec.hocky || '%')
+          AND pc.lopcham IS NOT NULL
+      LOOP
+        -- Parse số tuần phân công an toàn
+        BEGIN
+          v_num_pc := NULLIF(regexp_replace(v_pc_rec.pc_tuan, '[^0-9]', '', 'g'), '')::integer;
+        EXCEPTION WHEN OTHERS THEN
+          v_num_pc := NULL;
+        END;
+
+        -- Chỉ duyệt nếu chuỗi tên tuần khớp nhau HOẶC số tuần tương đương nhau (vd: "01" = "1")
+        IF (TRIM(v_pc_rec.pc_tuan) = TRIM(v_rec.tuan)) OR (v_num_pc IS NOT NULL AND v_num_rec IS NOT NULL AND v_num_pc = v_num_rec) THEN
+          
+          -- Kiểm tra lớp đã nộp phiếu chưa
+          SELECT EXISTS (
+            SELECT 1 FROM public.chamdiem
+            WHERE (namhoc = v_target_namhoc_id OR namhoc IS NULL)
+              AND (TRIM(hocky) = TRIM(v_rec.hocky) OR hocky ILIKE '%' || v_rec.hocky || '%')
+              AND (TRIM(tuan) = TRIM(v_rec.tuan) OR (
+                NULLIF(regexp_replace(tuan, '[^0-9]', '', 'g'), '') ~ '^[0-9]+$' AND 
+                NULLIF(regexp_replace(tuan, '[^0-9]', '', 'g'), '')::integer = v_num_rec
+              ))
+              AND lopcham = v_pc_rec.lopcham
+          ) INTO v_da_nop;
+
+          -- Kiểm tra lớp đã bị phạt tự động chưa
+          SELECT EXISTS (
+            SELECT 1 FROM public.chamdiem
+            WHERE (namhoc = v_target_namhoc_id OR namhoc IS NULL)
+              AND (TRIM(hocky) = TRIM(v_rec.hocky) OR hocky ILIKE '%' || v_rec.hocky || '%')
+              AND (TRIM(tuan) = TRIM(v_rec.tuan) OR (
+                NULLIF(regexp_replace(tuan, '[^0-9]', '', 'g'), '') ~ '^[0-9]+$' AND 
+                NULLIF(regexp_replace(tuan, '[^0-9]', '', 'g'), '')::integer = v_num_rec
+              ))
+              AND (chamlop = v_pc_rec.lopcham OR chidoan_id = v_pc_rec.lopcham)
+              AND (matieuchi = 'TUDONG' OR nguoicham = v_penalty_reporter)
+          ) INTO v_da_bi_phat;
+
+          -- Ghi nhận phạt nếu chưa nộp và chưa bị phạt
+          IF NOT v_da_nop AND NOT v_da_bi_phat THEN
+            SELECT tenchidoan INTO v_tenchidoan
+            FROM public.qlchidoan
+            WHERE id = v_pc_rec.lopcham;
+
+            INSERT INTO public.chamdiem (
+              namhoc,
+              hocky,
+              tuan,
+              thu,
+              ngay,
+              lopcham,
+              chamlop,
+              chidoan_id,
+              hotendoanvien,
+              matieuchi,
+              tentieuchi,
+              loaitieuchi,
+              diemtru,
+              diemcong,
+              ghichu,
+              nguoicham,
+              createdat,
+              updatedat
+            ) VALUES (
+              v_target_namhoc_id,
+              v_rec.hocky,
+              v_rec.tuan,
+              'Chủ nhật',
+              COALESCE(NULLIF(v_denngay_formatted, ''), v_rec.denngay, v_today_str),
+              NULL,
+              v_pc_rec.lopcham,
+              v_pc_rec.lopcham,
+              COALESCE(v_tenchidoan, 'Chi đoàn'),
+              'TUDONG',
+              v_penalty_criteria,
+              'Trừ điểm',
+              v_penalty_points,
+              0,
+              'Hệ thống tự động phạt lớp ' || COALESCE(v_tenchidoan, '') || ' do không nộp phiếu chấm điểm trong tuần ' || v_rec.tuan || '.',
+              v_penalty_reporter,
+              now(),
+              now()
+            );
+
+            v_penalized_classes_count := v_penalized_classes_count + 1;
+            v_penalized_list := v_penalized_list || jsonb_build_object(
+              'lop_id', v_pc_rec.lopcham,
+              'ten_lop', COALESCE(v_tenchidoan, 'Chi đoàn'),
+              'tuan', v_rec.tuan,
+              'hocky', v_rec.hocky,
+              'diemtru', v_penalty_points
+            );
+          END IF;
+        END IF;
+      END LOOP;
+    END IF;
+
+    v_details := v_details || jsonb_build_object(
+      'tuan', v_rec.tuan,
+      'hocky', v_rec.hocky,
+      'denngay_chuan', v_denngay_formatted,
+      'da_khoa', (v_rec.islocked = TRUE OR v_should_lock),
+      'ly_do', v_reason
+    );
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'namhoc_hien_tai', v_target_tennamhoc,
+    'tuan_mac_dinh_kich_hoat', COALESCE(v_new_default_tuan_ten, 'Chưa thay đổi'),
+    'chuc_nang_phat_dang_bat', v_auto_enabled,
+    'so_tuan_da_khoa', v_locked_count,
+    'so_lop_bi_phat', v_penalized_classes_count,
+    'danh_sach_lop_bi_phat', v_penalized_list,
+    'thoi_gian_hien_tai_vn', to_char(v_now_vn, 'YYYY-MM-DD HH24:MI:SS'),
+    'chi_tiet_kiem_tra', v_details
+  );
+END;
+$_$;
+
+
+ALTER FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat() OWNER TO postgres;
+
+--
+-- Name: fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $$
+DECLARE
+  v_now_vn timestamp;
+  v_today_str text;
+  v_user_auth record;
+  v_rec_tuan record;
+  v_penalty_points numeric := 10;
+  v_penalty_criteria text := 'Lỗi không nộp phiếu chấm điểm tuần';
+  v_penalty_reporter text := 'Hệ thống tự động';
+  v_penalized_classes_count integer := 0;
+  v_penalized_list jsonb := '[]'::jsonb;
+  v_pc_rec record;
+  v_da_nop boolean;
+  v_da_bi_phat boolean;
+  v_tenchidoan text;
+  v_tuan_num text;
+BEGIN
+  -- Lấy ngày giờ hiện tại chuẩn múi giờ Việt Nam
+  v_now_vn := now() AT TIME ZONE 'Asia/Ho_Chi_Minh';
+  v_today_str := to_char(v_now_vn, 'YYYY-MM-DD');
+
+  -- =========================================================================
+  -- 1. XÁC MINH TÀI KHOẢN VÀ MẬT KHẨU
+  -- =========================================================================
+  SELECT id, username, matkhau, vaitro, phanquyen, trangthai
+  INTO v_user_auth
+  FROM public.taikhoan
+  WHERE (username = p_username OR LOWER(username) = LOWER(p_username))
+    AND (trangthai IS NULL OR trangthai = true)
+  LIMIT 1;
+
+  IF v_user_auth.id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Không tìm thấy tài khoản người thực hiện!'
+    );
+  END IF;
+
+  IF COALESCE(v_user_auth.matkhau, '') <> p_password THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Mật khẩu xác nhận không chính xác. Thao tác xử phạt bị hủy bỏ!'
+    );
+  END IF;
+
+  -- =========================================================================
+  -- 2. KIỂM TRA TUẦN HỌC (NHẮM MỤC TIÊU ĐỘC LẬP)
+  -- =========================================================================
+  SELECT th.id, th.namhoc, th.hocky, th.tuan, th.denngay, th.islocked, nh.tennamhoc
+  INTO v_rec_tuan
+  FROM public.tuanhoc th
+  LEFT JOIN public.namhoc nh ON nh.id = th.namhoc
+  WHERE th.id = p_tuan_id AND th.namhoc = p_namhoc_id;
+
+  IF v_rec_tuan.id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Tuần học không tồn tại hoặc không thuộc đúng năm học được chỉ định!'
+    );
+  END IF;
+
+  -- BẮT BUỘC TUẦN PHẢI ĐANG KHÓA MỚI ĐƯỢC PHÉP PHẠT
+  IF COALESCE(v_rec_tuan.islocked, false) = false THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Tuần ' || COALESCE(v_rec_tuan.tuan, '') || ' chưa được khóa. Bạn phải Khóa tuần này trước khi thực hiện xử phạt!'
+    );
+  END IF;
+
+  v_tuan_num := regexp_replace(COALESCE(v_rec_tuan.tuan, ''), '[^0-9]', '', 'g');
+
+  -- =========================================================================
+  -- 3. LẤY CẤU HÌNH PHẠT
+  -- =========================================================================
+  SELECT 
+    COALESCE(autopenaltypoints, 10),
+    COALESCE(autopenaltycriteria, 'Lỗi không nộp phiếu chấm điểm tuần'),
+    COALESCE(autopenaltyreporter, 'Hệ thống tự động')
+  INTO 
+    v_penalty_points,
+    v_penalty_criteria,
+    v_penalty_reporter
+  FROM public.settings
+  WHERE namhoc = p_namhoc_id OR namhoc IS NULL
+  ORDER BY (namhoc = p_namhoc_id) DESC, updatedat DESC NULLS LAST
+  LIMIT 1;
+
+  -- =========================================================================
+  -- 4. THỰC THI QUÉT VÀ PHẠT (CHỈ QUÉT LỚP TRONG CHÍNH XÁC TUẦN NÀY)
+  -- =========================================================================
+  FOR v_pc_rec IN
+    SELECT DISTINCT pc.lopcham
+    FROM public.phancong pc
+    WHERE pc.namhoc = p_namhoc_id
+      AND (TRIM(pc.hocky) = TRIM(v_rec_tuan.hocky) OR pc.hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+      AND (
+        TRIM(pc.tuan) = TRIM(v_rec_tuan.tuan) 
+        OR (v_tuan_num <> '' AND regexp_replace(pc.tuan, '[^0-9]', '', 'g') = v_tuan_num)
+      )
+      AND pc.lopcham IS NOT NULL
+  LOOP
+    -- A. Kiểm tra lớp đã nộp phiếu chưa (Trong tuần này)
+    SELECT EXISTS (
+      SELECT 1 FROM public.chamdiem
+      WHERE namhoc = p_namhoc_id
+        AND (TRIM(hocky) = TRIM(v_rec_tuan.hocky) OR hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+        AND (
+          TRIM(tuan) = TRIM(v_rec_tuan.tuan) 
+          OR (v_tuan_num <> '' AND regexp_replace(tuan, '[^0-9]', '', 'g') = v_tuan_num)
+        )
+        AND lopcham = v_pc_rec.lopcham
+    ) INTO v_da_nop;
+
+    -- B. Kiểm tra lớp đã bị phạt tự động chưa (Trong tuần này)
+    SELECT EXISTS (
+      SELECT 1 FROM public.chamdiem
+      WHERE namhoc = p_namhoc_id
+        AND (TRIM(hocky) = TRIM(v_rec_tuan.hocky) OR hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+        AND (
+          TRIM(tuan) = TRIM(v_rec_tuan.tuan) 
+          OR (v_tuan_num <> '' AND regexp_replace(tuan, '[^0-9]', '', 'g') = v_tuan_num)
+        )
+        AND (chamlop = v_pc_rec.lopcham OR chidoan_id = v_pc_rec.lopcham)
+        AND (matieuchi = 'TUDONG' OR nguoicham = v_penalty_reporter)
+    ) INTO v_da_bi_phat;
+
+    -- C. Ghi nhận phạt nếu LỚP ĐƯỢC PHÂN CÔNG nhưng KHÔNG NỘP VÀ CHƯA BỊ PHẠT
+    IF NOT v_da_nop AND NOT v_da_bi_phat THEN
+      SELECT tenchidoan INTO v_tenchidoan
+      FROM public.qlchidoan
+      WHERE id = v_pc_rec.lopcham;
+
+      INSERT INTO public.chamdiem (
+        namhoc,
+        hocky,
+        tuan,
+        thu,
+        ngay,
+        lopcham,
+        chamlop,
+        chidoan_id,
+        hotendoanvien,
+        matieuchi,
+        tentieuchi,
+        loaitieuchi,
+        diemtru,
+        diemcong,
+        ghichu,
+        nguoicham,
+        createdat,
+        updatedat
+      ) VALUES (
+        p_namhoc_id,
+        v_rec_tuan.hocky,
+        v_rec_tuan.tuan,
+        'Chủ nhật',
+        COALESCE(v_rec_tuan.denngay, v_today_str),
+        NULL,
+        v_pc_rec.lopcham,
+        v_pc_rec.lopcham,
+        COALESCE(v_tenchidoan, 'Chi đoàn'),
+        'TUDONG',
+        v_penalty_criteria,
+        'Trừ điểm',
+        v_penalty_points,
+        0,
+        'Hệ thống phạt thủ công lớp ' || COALESCE(v_tenchidoan, '') || ' do không nộp phiếu chấm điểm trong tuần ' || COALESCE(v_rec_tuan.tuan, '') || '.',
+        v_penalty_reporter,
+        now(),
+        now()
+      );
+
+      v_penalized_classes_count := v_penalized_classes_count + 1;
+      v_penalized_list := v_penalized_list || jsonb_build_object(
+        'lop_id', v_pc_rec.lopcham,
+        'ten_lop', COALESCE(v_tenchidoan, 'Chi đoàn'),
+        'tuan', v_rec_tuan.tuan,
+        'hocky', v_rec_tuan.hocky,
+        'diemtru', v_penalty_points
+      );
+    END IF;
+  END LOOP;
+  
+  -- =========================================================================
+  -- 5. LƯU LOG KIỂM TOÁN
+  -- =========================================================================
+  BEGIN
+    INSERT INTO public.activity_logs (
+      user_id,
+      username,
+      action,
+      table_name,
+      record_id,
+      details,
+      created_at
+    ) VALUES (
+      v_user_auth.id,
+      v_user_auth.username,
+      'MANUAL_PENALTY',
+      'chamdiem',
+      p_tuan_id::text,
+      'Thực hiện phạt thủ công tuần ' || COALESCE(v_rec_tuan.tuan, '') || ' (' || COALESCE(v_rec_tuan.hocky, '') || '). Tổng số lớp bị phạt: ' || v_penalized_classes_count,
+      now()
+    );
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'so_lop_bi_phat', v_penalized_classes_count,
+    'danh_sach_lop_bi_phat', v_penalized_list,
+    'message', 'Hoàn tất kiểm tra và xử phạt thủ công tuần ' || COALESCE(v_rec_tuan.tuan, '') || '. Có ' || v_penalized_classes_count || ' lớp bị phạt.'
+  );
+END;
+$$;
+
+
+ALTER FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) OWNER TO postgres;
+
+--
+-- Name: fn_xoa_tuan_hoc_toan_dien(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $$
+DECLARE
+  v_rec_tuan record;
+  v_user_auth record;
+  v_deleted_phancong integer := 0;
+  v_deleted_chamdiem integer := 0;
+  v_deleted_giohoctap integer := 0;
+  v_deleted_theodoi360 integer := 0;
+  v_tuan_num text;
+  v_log_desc text;
+BEGIN
+  -- 1. Xác minh tài khoản quản trị viên và mật khẩu
+  SELECT id, username, matkhau, vaitro, phanquyen, trangthai
+  INTO v_user_auth
+  FROM public.taikhoan
+  WHERE (username = p_username OR LOWER(username) = LOWER(p_username))
+    AND (trangthai IS NULL OR trangthai = true)
+  LIMIT 1;
+
+  IF v_user_auth.id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Không tìm thấy tài khoản người thực hiện!'
+    );
+  END IF;
+
+  -- Kiểm tra mật khẩu (hỗ trợ cả mật khẩu thường hoặc hash)
+  IF COALESCE(v_user_auth.matkhau, '') <> p_password THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Mật khẩu xác nhận không chính xác. Thao tác xóa bị hủy bỏ!'
+    );
+  END IF;
+
+  -- 2. Kiểm tra tuần học có tồn tại và thuộc đúng năm học chỉ định
+  SELECT th.id, th.namhoc, th.hocky, th.tuan, nh.tennamhoc
+  INTO v_rec_tuan
+  FROM public.tuanhoc th
+  LEFT JOIN public.namhoc nh ON nh.id = th.namhoc
+  WHERE th.id = p_tuan_id AND th.namhoc = p_namhoc_id;
+
+  IF v_rec_tuan.id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Tuần học không tồn tại hoặc không thuộc đúng năm học được chỉ định!'
+    );
+  END IF;
+
+  v_tuan_num := regexp_replace(COALESCE(v_rec_tuan.tuan, ''), '[^0-9]', '', 'g');
+
+  -- 3. XÓA BẢNG theodoi360 (Khóa theo nam_hoc_id và tuan_id)
+  BEGIN
+    DELETE FROM public.theodoi360 td
+    WHERE td.nam_hoc_id = p_namhoc_id AND td.tuan_id = p_tuan_id;
+    GET DIAGNOSTICS v_deleted_theodoi360 = ROW_COUNT;
+  EXCEPTION WHEN OTHERS THEN
+    v_deleted_theodoi360 := 0;
+  END;
+
+  -- 4. XÓA BẢNG phancong (Phân công chấm tuần này của đúng năm học)
+  DELETE FROM public.phancong pc
+  WHERE pc.namhoc = p_namhoc_id
+    AND (TRIM(pc.hocky) = TRIM(v_rec_tuan.hocky) OR pc.hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+    AND (
+      TRIM(pc.tuan) = TRIM(v_rec_tuan.tuan) 
+      OR (v_tuan_num <> '' AND regexp_replace(pc.tuan, '[^0-9]', '', 'g') = v_tuan_num)
+    );
+  GET DIAGNOSTICS v_deleted_phancong = ROW_COUNT;
+
+  -- 5. XÓA BẢNG chamdiem (Phiếu chấm điểm thi đua của đúng năm học)
+  DELETE FROM public.chamdiem cd
+  WHERE cd.namhoc = p_namhoc_id
+    AND (TRIM(cd.hocky) = TRIM(v_rec_tuan.hocky) OR cd.hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+    AND (
+      TRIM(cd.tuan) = TRIM(v_rec_tuan.tuan) 
+      OR (v_tuan_num <> '' AND regexp_replace(cd.tuan, '[^0-9]', '', 'g') = v_tuan_num)
+    );
+  GET DIAGNOSTICS v_deleted_chamdiem = ROW_COUNT;
+
+  -- 6. XÓA BẢNG gio_hoc_tap (Dữ liệu giờ học tốt của đúng năm học)
+  BEGIN
+    DELETE FROM public.gio_hoc_tap gh
+    WHERE gh.namhoc_id = p_namhoc_id AND gh.tuan_id = p_tuan_id;
+    GET DIAGNOSTICS v_deleted_giohoctap = ROW_COUNT;
+  EXCEPTION WHEN OTHERS THEN
+    v_deleted_giohoctap := 0;
+  END;
+
+  -- 7. XÓA BẢNG tuanhoc (Bản ghi tuần của đúng năm học)
+  DELETE FROM public.tuanhoc th
+  WHERE th.id = p_tuan_id AND th.namhoc = p_namhoc_id;
+
+  -- 8. Ghi nhật ký vào activity_logs để kiểm toán
+  v_log_desc := 'Xóa tuần học an toàn [' || COALESCE(v_rec_tuan.tuan, '') || ' - ' || COALESCE(v_rec_tuan.hocky, '') || '] thuộc năm học: ' || COALESCE(v_rec_tuan.tennamhoc, '') || '. Đã xóa: ' || v_deleted_phancong || ' phân công, ' || v_deleted_chamdiem || ' phiếu chấm, ' || v_deleted_giohoctap || ' giờ học, ' || v_deleted_theodoi360 || ' theo dõi 360.';
+  BEGIN
+    INSERT INTO public.activity_logs (
+      user_id,
+      username,
+      action,
+      table_name,
+      record_id,
+      details,
+      created_at
+    ) VALUES (
+      v_user_auth.id,
+      v_user_auth.username,
+      'DELETE_WEEK_CASCADE',
+      'tuanhoc',
+      p_tuan_id::text,
+      v_log_desc,
+      now()
+    );
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'message', 'Đã xóa tuần và toàn bộ dữ liệu liên quan thành công!',
+    'tuan', v_rec_tuan.tuan,
+    'hocky', v_rec_tuan.hocky,
+    'da_xoa_phancong', v_deleted_phancong,
+    'da_xoa_chamdiem', v_deleted_chamdiem,
+    'da_xoa_giohoctap', v_deleted_giohoctap,
+    'da_xoa_theodoi360', v_deleted_theodoi360,
+    'tong_da_xoa', (v_deleted_phancong + v_deleted_chamdiem + v_deleted_giohoctap + v_deleted_theodoi360 + 1)
+  );
+END;
+$$;
+
+
+ALTER FUNCTION public.fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) OWNER TO postgres;
+
+--
+-- Name: fn_xu_phat_thu_cong(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'extensions'
+    AS $$
+DECLARE
+  v_now_vn timestamp;
+  v_today_str text;
+  v_user_auth record;
+  v_rec_tuan record;
+  v_penalty_points numeric := 10;
+  v_penalty_criteria text := 'Lỗi không nộp phiếu chấm điểm tuần';
+  v_penalty_reporter text := 'Hệ thống tự động';
+  v_penalized_classes_count integer := 0;
+  v_penalized_list jsonb := '[]'::jsonb;
+  v_pc_rec record;
+  v_da_nop boolean;
+  v_da_bi_phat boolean;
+  v_tenchidoan text;
+  v_tuan_num text;
+BEGIN
+  v_now_vn := now() AT TIME ZONE 'Asia/Ho_Chi_Minh';
+  v_today_str := to_char(v_now_vn, 'YYYY-MM-DD');
+
+  -- =========================================================================
+  -- 1. XÁC MINH TÀI KHOẢN VÀ MẬT KHẨU
+  -- =========================================================================
+  -- Sửa lại đúng tên cột password, role theo cấu trúc bảng taikhoan
+  SELECT id, username, password, role
+  INTO v_user_auth
+  FROM public.taikhoan
+  WHERE (username = p_username OR LOWER(username) = LOWER(p_username))
+  LIMIT 1;
+
+  IF v_user_auth.id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Không tìm thấy tài khoản người thực hiện!'
+    );
+  END IF;
+
+  -- Đối chiếu với cột password
+  IF COALESCE(v_user_auth.password, '') <> p_password THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Mật khẩu xác nhận không chính xác. Thao tác xử phạt bị hủy bỏ!'
+    );
+  END IF;
+
+  -- =========================================================================
+  -- 2. KIỂM TRA TUẦN HỌC
+  -- =========================================================================
+  SELECT th.id, th.namhoc, th.hocky, th.tuan, th.denngay, th.islocked, nh.tennamhoc
+  INTO v_rec_tuan
+  FROM public.tuanhoc th
+  LEFT JOIN public.namhoc nh ON nh.id = th.namhoc
+  WHERE th.id = p_tuan_id AND th.namhoc = p_namhoc_id;
+
+  IF v_rec_tuan.id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Tuần học không tồn tại hoặc không thuộc đúng năm học được chỉ định!'
+    );
+  END IF;
+
+  IF COALESCE(v_rec_tuan.islocked, false) = false THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Tuần ' || COALESCE(v_rec_tuan.tuan, '') || ' chưa được khóa. Bạn phải Khóa tuần này trước khi thực hiện xử phạt!'
+    );
+  END IF;
+
+  v_tuan_num := regexp_replace(COALESCE(v_rec_tuan.tuan, ''), '[^0-9]', '', 'g');
+
+  -- =========================================================================
+  -- 3. LẤY CẤU HÌNH PHẠT
+  -- =========================================================================
+  SELECT 
+    COALESCE(autopenaltypoints, 10),
+    COALESCE(autopenaltycriteria, 'Lỗi không nộp phiếu chấm điểm tuần'),
+    COALESCE(autopenaltyreporter, 'Hệ thống tự động')
+  INTO 
+    v_penalty_points,
+    v_penalty_criteria,
+    v_penalty_reporter
+  FROM public.settings
+  WHERE namhoc = p_namhoc_id OR namhoc IS NULL
+  ORDER BY (namhoc = p_namhoc_id) DESC, updatedat DESC NULLS LAST
+  LIMIT 1;
+
+  -- =========================================================================
+  -- 4. THỰC THI QUÉT VÀ PHẠT (CHỈ QUÉT LỚP TRONG CHÍNH XÁC TUẦN NÀY)
+  -- =========================================================================
+  FOR v_pc_rec IN
+    SELECT DISTINCT pc.lopcham
+    FROM public.phancong pc
+    WHERE pc.namhoc = p_namhoc_id
+      AND (TRIM(pc.hocky) = TRIM(v_rec_tuan.hocky) OR pc.hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+      AND (
+        TRIM(pc.tuan) = TRIM(v_rec_tuan.tuan) 
+        OR (v_tuan_num <> '' AND regexp_replace(pc.tuan, '[^0-9]', '', 'g') = v_tuan_num)
+      )
+      AND pc.lopcham IS NOT NULL
+  LOOP
+    SELECT EXISTS (
+      SELECT 1 FROM public.chamdiem
+      WHERE namhoc = p_namhoc_id
+        AND (TRIM(hocky) = TRIM(v_rec_tuan.hocky) OR hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+        AND (
+          TRIM(tuan) = TRIM(v_rec_tuan.tuan) 
+          OR (v_tuan_num <> '' AND regexp_replace(tuan, '[^0-9]', '', 'g') = v_tuan_num)
+        )
+        AND lopcham = v_pc_rec.lopcham
+    ) INTO v_da_nop;
+
+    SELECT EXISTS (
+      SELECT 1 FROM public.chamdiem
+      WHERE namhoc = p_namhoc_id
+        AND (TRIM(hocky) = TRIM(v_rec_tuan.hocky) OR hocky ILIKE '%' || v_rec_tuan.hocky || '%')
+        AND (
+          TRIM(tuan) = TRIM(v_rec_tuan.tuan) 
+          OR (v_tuan_num <> '' AND regexp_replace(tuan, '[^0-9]', '', 'g') = v_tuan_num)
+        )
+        AND (chamlop = v_pc_rec.lopcham OR chidoan_id = v_pc_rec.lopcham)
+        AND (matieuchi = 'TUDONG' OR nguoicham = v_penalty_reporter)
+    ) INTO v_da_bi_phat;
+
+    IF NOT v_da_nop AND NOT v_da_bi_phat THEN
+      SELECT tenchidoan INTO v_tenchidoan
+      FROM public.qlchidoan
+      WHERE id = v_pc_rec.lopcham;
+
+      INSERT INTO public.chamdiem (
+        namhoc,
+        hocky,
+        tuan,
+        thu,
+        ngay,
+        lopcham,
+        chamlop,
+        chidoan_id,
+        hotendoanvien,
+        matieuchi,
+        tentieuchi,
+        loaitieuchi,
+        diemtru,
+        diemcong,
+        ghichu,
+        nguoicham,
+        createdat,
+        updatedat
+      ) VALUES (
+        p_namhoc_id,
+        v_rec_tuan.hocky,
+        v_rec_tuan.tuan,
+        'Chủ nhật',
+        COALESCE(v_rec_tuan.denngay, v_today_str),
+        NULL,
+        v_pc_rec.lopcham,
+        v_pc_rec.lopcham,
+        COALESCE(v_tenchidoan, 'Chi đoàn'),
+        'TUDONG',
+        v_penalty_criteria,
+        'Trừ điểm',
+        v_penalty_points,
+        0,
+        'Hệ thống phạt thủ công lớp ' || COALESCE(v_tenchidoan, '') || ' do không nộp phiếu chấm điểm trong tuần ' || COALESCE(v_rec_tuan.tuan, '') || '.',
+        v_penalty_reporter,
+        now(),
+        now()
+      );
+
+      v_penalized_classes_count := v_penalized_classes_count + 1;
+      v_penalized_list := v_penalized_list || jsonb_build_object(
+        'lop_id', v_pc_rec.lopcham,
+        'ten_lop', COALESCE(v_tenchidoan, 'Chi đoàn'),
+        'tuan', v_rec_tuan.tuan,
+        'hocky', v_rec_tuan.hocky,
+        'diemtru', v_penalty_points
+      );
+    END IF;
+  END LOOP;
+  
+  -- =========================================================================
+  -- 5. LƯU LOG KIỂM TOÁN
+  -- =========================================================================
+  BEGIN
+    INSERT INTO public.activity_logs (
+      user_id,
+      username,
+      action,
+      table_name,
+      record_id,
+      details,
+      created_at
+    ) VALUES (
+      v_user_auth.id,
+      v_user_auth.username,
+      'MANUAL_PENALTY',
+      'chamdiem',
+      p_tuan_id::text,
+      'Thực hiện phạt thủ công tuần ' || COALESCE(v_rec_tuan.tuan, '') || ' (' || COALESCE(v_rec_tuan.hocky, '') || '). Tổng số lớp bị phạt: ' || v_penalized_classes_count,
+      now()
+    );
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'so_lop_bi_phat', v_penalized_classes_count,
+    'danh_sach_lop_bi_phat', v_penalized_list,
+    'message', 'Hoàn tất kiểm tra và xử phạt thủ công tuần ' || COALESCE(v_rec_tuan.tuan, '') || '. Có ' || v_penalized_classes_count || ' lớp bị phạt.'
+  );
+END;
+$$;
+
+
+ALTER FUNCTION public.fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) OWNER TO postgres;
 
 --
 -- Name: get_auth_chidoan_id(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -496,6 +2021,112 @@ $$;
 
 
 ALTER FUNCTION public.get_secure_role() OWNER TO postgres;
+
+--
+-- Name: get_student_violation_stats_advanced(uuid, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text DEFAULT NULL::text, p_chidoan_id uuid DEFAULT NULL::uuid, p_doanvien_id uuid DEFAULT NULL::uuid) RETURNS TABLE(doanvien_id uuid, vi_pham text, thanh_tich text, tong_diem_tru numeric, tong_diem_cong numeric)
+    LANGUAGE plpgsql SECURITY DEFINER
+    AS $$
+BEGIN
+  -- 1. ĐIỀU KIỆN TIÊN QUYẾT: BẮT BUỘC PHẢI TRUYỀN NĂM HỌC HIỆN TẠI
+  IF p_namhoc_id IS NULL THEN
+    RAISE EXCEPTION 'Lỗi nghiêm ngặt: Tham số p_namhoc_id (Năm học hiện tại) là bắt buộc và không được để trống!';
+  END IF;
+
+  RETURN QUERY
+  SELECT 
+    dv.id AS doanvien_id,
+    
+    -- Chuỗi tổng hợp Vi phạm chi tiết
+    COALESCE(
+      STRING_AGG(
+        CASE 
+          WHEN cd.diemtru > 0 OR cd.loaitieuchi ILIKE '%vi pham%' OR cd.loaitieuchi ILIKE '%vi phạm%'
+          THEN (cd.tentieuchi || ' (-' || cd.diemtru || ')')
+          ELSE NULL 
+        END, 
+        ', '
+      ), ''
+    ) AS vi_pham,
+    
+    -- Chuỗi tổng hợp Thành tích chi tiết
+    COALESCE(
+      STRING_AGG(
+        CASE 
+          WHEN cd.diemcong > 0 OR cd.loaitieuchi ILIKE '%thanh tich%' OR cd.loaitieuchi ILIKE '%thành tích%'
+          THEN (cd.tentieuchi || ' (+' || cd.diemcong || ')')
+          ELSE NULL 
+        END, 
+        ', '
+      ), ''
+    ) AS thanh_tich,
+    
+    -- Tổng điểm trừ (Ép kiểu ::NUMERIC)
+    COALESCE(SUM(
+      CASE 
+        WHEN cd.diemtru > 0 OR cd.loaitieuchi ILIKE '%vi pham%' OR cd.loaitieuchi ILIKE '%vi phạm%'
+        THEN COALESCE(cd.diemtru::NUMERIC, 0) 
+        ELSE 0 
+      END
+    ), 0) AS tong_diem_tru,
+    
+    -- Tổng điểm cộng (Ép kiểu ::NUMERIC)
+    COALESCE(SUM(
+      CASE 
+        WHEN cd.diemcong > 0 OR cd.loaitieuchi ILIKE '%thanh tich%' OR cd.loaitieuchi ILIKE '%thành tích%'
+        THEN COALESCE(cd.diemcong::NUMERIC, 0) 
+        ELSE 0 
+      END
+    ), 0) AS tong_diem_cong
+
+  -- BẢO VỆ 1: CHỈ LẤY ĐOÀN VIÊN THUỘC ĐÚNG NĂM HỌC HIỆN TẠI
+  FROM public.doanvien dv
+  
+  -- BẢO VỆ 2: LEFT JOIN ĐẢM BẢO 100% HỌC SINH KHÔNG BỊ MẤT DÒNG
+  -- VÀ CHỈ LẤY BẢN GHI CHẤM ĐIỂM TRONG ĐÚNG NĂM HỌC HIỆN TẠI
+  LEFT JOIN public.chamdiem cd 
+         ON dv.id = cd.doanvienid 
+        AND cd.namhoc = p_namhoc_id
+        AND (
+          -- Nếu p_hocky là NULL, rỗng hoặc 'Cả năm' -> Lấy toàn bộ bản ghi trong năm học đó
+          p_hocky IS NULL 
+          OR TRIM(p_hocky) = ''
+          OR LOWER(TRIM(p_hocky)) IN ('cả năm', 'canam', 'all', 'toàn năm', 'toannam')
+          OR REPLACE(LOWER(TRIM(cd.hocky)), ' ', '') = REPLACE(LOWER(TRIM(p_hocky)), ' ', '')
+          OR (
+            REPLACE(LOWER(TRIM(p_hocky)), ' ', '') IN ('hk1', 'hocky1', '1', 'hki')
+            AND (
+              REPLACE(LOWER(TRIM(COALESCE(cd.hocky, ''))), ' ', '') IN ('hk1', 'hocky1', 'hocki1', 'hki', '1', 'họckỳ1', 'họckì1', 'họckỳi', 'họckìi', 'kỳ1', 'kì1', 'ky1', 'ki1')
+              OR ((LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%1%' OR LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%i') AND LOWER(TRIM(COALESCE(cd.hocky, ''))) NOT LIKE '%ii%' AND LOWER(TRIM(COALESCE(cd.hocky, ''))) NOT LIKE '%2%')
+            )
+          )
+          OR (
+            REPLACE(LOWER(TRIM(p_hocky)), ' ', '') IN ('hk2', 'hocky2', '2', 'hkii')
+            AND (
+              REPLACE(LOWER(TRIM(COALESCE(cd.hocky, ''))), ' ', '') IN ('hk2', 'hocky2', 'hocki2', 'hkii', '2', 'họckỳ2', 'họckì2', 'họckỳii', 'họckìii', 'kỳ2', 'kì2', 'ky2', 'ki2')
+              OR (LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%2%' OR LOWER(TRIM(COALESCE(cd.hocky, ''))) LIKE '%ii%')
+            )
+          )
+        )
+        
+  WHERE 
+    -- ĐIỀU KIỆN TIÊN QUYẾT: DUY NHẤT LẤY HỌC SINH CỦA NĂM HỌC HIỆN TẠI
+    dv.namhoc = p_namhoc_id
+    
+    -- Lọc theo Chi đoàn nếu có chỉ định (GVCN / BCH)
+    AND (p_chidoan_id IS NULL OR dv.chidoan_id = p_chidoan_id)
+    
+    -- Lọc theo cá nhân Đoàn viên nếu học sinh tự xem
+    AND (p_doanvien_id IS NULL OR dv.id = p_doanvien_id)
+    
+  GROUP BY dv.id;
+END;
+$$;
+
+
+ALTER FUNCTION public.get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text, p_chidoan_id uuid, p_doanvien_id uuid) OWNER TO postgres;
 
 --
 -- Name: handle_chi_doan_deletion(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -1236,7 +2867,9 @@ CREATE TABLE public.doanvien (
     createdat timestamp with time zone DEFAULT now(),
     sothedoan text,
     phuongtien text,
-    thongtinphuongtien text
+    thongtinphuongtien text,
+    hinh_anh text,
+    thongtintheodoi text
 );
 
 
@@ -1523,7 +3156,8 @@ CREATE TABLE public.ptdoanvien (
     updatedat timestamp with time zone DEFAULT now(),
     namhoc uuid,
     soquyetdinh text,
-    ngayquyetdinh date
+    ngayquyetdinh date,
+    ly_do text
 );
 
 
@@ -1763,11 +3397,6 @@ CREATE TABLE public.settings (
     cloudinary_upload_preset text,
     cloudinary_api_key text,
     cloudinary_api_secret text,
-    r2_account_id text,
-    r2_access_key_id text,
-    r2_secret_access_key text,
-    r2_bucket_name text,
-    r2_custom_domain text,
     show_class_select_gvcn text DEFAULT 'Không hiển thị'::text,
     diem_tot numeric DEFAULT 10,
     diem_kha numeric DEFAULT 7,
@@ -1900,7 +3529,9 @@ CREATE TABLE public.theodoi360 (
     hoc_ky text,
     phan_hoi_bi_to_cao text,
     phan_hoi_lop text,
-    minh_chung_drive text
+    minh_chung_drive text,
+    ly_do_bac_bo text,
+    ly_do_duyet text
 );
 
 
@@ -2653,6 +4284,13 @@ CREATE INDEX idx_tuanhoc_optimization_namhoc_hocky ON public.tuanhoc USING btree
 
 
 --
+-- Name: idx_unique_default_namhoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE UNIQUE INDEX idx_unique_default_namhoc ON public.namhoc USING btree (isdefault) WHERE (isdefault = true);
+
+
+--
 -- Name: idx_xet_thidua_chidoan; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -3300,6 +4938,13 @@ CREATE POLICY "Khách vãng lai được xem" ON public.namhoc FOR SELECT TO ano
 
 
 --
+-- Name: tuanhoc Khách vãng lai được xem; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Khách vãng lai được xem" ON public.tuanhoc FOR SELECT TO anon USING (true);
+
+
+--
 -- Name: activity_logs; Type: ROW SECURITY; Schema: public; Owner: postgres
 --
 
@@ -3631,7 +5276,25 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 
 
 --
+-- Name: FUNCTION calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION calculate_scores_by_year(p_namhoc_id uuid); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: FUNCTION check_user_mfa_status(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -3655,7 +5318,49 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 
 
 --
+-- Name: FUNCTION fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid, p_hocky text, p_tuan text, p_force boolean); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text, p_namhoc_id uuid); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: FUNCTION fn_tu_dong_bam_mat_khau_taikhoan(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_tu_dong_khoa_tuan(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_tu_dong_khoa_tuan_va_xu_phat(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -3698,6 +5403,12 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 
 --
 -- Name: FUNCTION get_secure_role(); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
+-- Name: FUNCTION get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: postgres
 --
 
 
@@ -3988,7 +5699,7 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 -- PostgreSQL database dump complete
 --
 
-\unrestrict LgxLBD0rh4kIHGlUYKfBnYnFgUcdPXpK0SonL4FD91DJqMTJLjwv6xaHN5eLTjH
+\unrestrict fX1E8YigF1yFB3zuliJexVZueTb771EbyXI9rVBm0w8KcQAwJQ6Afvia9LawDIp
 
 
 -- 1. Khởi tạo tài khoản quản trị
