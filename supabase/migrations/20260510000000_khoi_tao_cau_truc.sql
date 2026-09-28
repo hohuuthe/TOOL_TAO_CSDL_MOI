@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict fX1E8YigF1yFB3zuliJexVZueTb771EbyXI9rVBm0w8KcQAwJQ6Afvia9LawDIp
+\restrict fWSjDYPgGDUCxfUQbLubKMeBywntHqleKsmdPuAkreMXaXLjfgQhXra9fJ2sxVK
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -5699,7 +5699,7 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 -- PostgreSQL database dump complete
 --
 
-\unrestrict fX1E8YigF1yFB3zuliJexVZueTb771EbyXI9rVBm0w8KcQAwJQ6Afvia9LawDIp
+\unrestrict fWSjDYPgGDUCxfUQbLubKMeBywntHqleKsmdPuAkreMXaXLjfgQhXra9fJ2sxVK
 
 
 -- 1. Khởi tạo tài khoản quản trị
