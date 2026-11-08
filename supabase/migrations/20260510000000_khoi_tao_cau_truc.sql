@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict fWSjDYPgGDUCxfUQbLubKMeBywntHqleKsmdPuAkreMXaXLjfgQhXra9fJ2sxVK
+\restrict Czv1ObUcsBCSfJknx9b3moTGpOXNUPSHjWNzLtOB44ghxse5MPxbvV1cQ8qO1OX
 
--- Dumped from database version 17.6
--- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
+-- Dumped from database version 17.11
+-- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg26.04+2)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -1962,6 +1962,143 @@ $$;
 ALTER FUNCTION public.get_auth_role() OWNER TO postgres;
 
 --
+-- Name: get_chamdiem_history(text, integer, integer); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_chamdiem_history(p_id text DEFAULT NULL::text, p_limit integer DEFAULT 50, p_offset integer DEFAULT 0) RETURNS TABLE(log_id bigint, thoi_gian timestamp with time zone, hanh_dong text, nguoi_thuc_hien uuid, ten_nguoi_thuc_hien text, vai_tro_nguoi_thuc_hien text, thay_doi_chi_tiet jsonb, du_lieu_cu jsonb, du_lieu_moi jsonb)
+    LANGUAGE plpgsql STABLE SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public', 'audit', 'auth'
+    AS $$
+DECLARE
+    v_table_oid oid := 'public.chamdiem'::regclass;
+    v_pkey_cols text[] := audit.primary_key_columns(v_table_oid);
+    v_target_record_id uuid;
+    v_current_uid uuid := auth.uid();
+    v_current_email text := auth.jwt() ->> 'email';
+    v_user_role text;
+BEGIN
+    -- =====================================================================
+    -- BƯỚC 1: KIỂM TRA ĐĂNG NHẬP & VAI TRÒ TỪ BẢNG 'public.taikhoan'
+    -- =====================================================================
+    
+    -- 1.1. Chặn ngay nếu gọi từ Client mà chưa đăng nhập
+    IF v_current_uid IS NULL AND auth.role() <> 'service_role' THEN
+        RAISE EXCEPTION 'Truy cập bị từ chối: Bạn cần đăng nhập để xem lịch sử chấm điểm.'
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- 1.2. Kiểm tra cột 'role' trong bảng 'public.taikhoan' (Bỏ qua nếu là service_role/SQL Editor)
+    IF auth.role() <> 'service_role' THEN
+        
+        -- Chuyển dòng của bảng taikhoan sang JSONB giúp khớp tự động dù bạn đặt tên cột 
+        -- liên kết là 'id', 'user_id', 'uid' hay liên kết qua 'email'
+        SELECT COALESCE(tk_json ->> 'role', tk_json ->> 'vai_tro')
+        INTO v_user_role
+        FROM public.taikhoan tk
+        CROSS JOIN LATERAL to_jsonb(tk) AS tk_json
+        WHERE (tk_json ->> 'id') = v_current_uid::text
+           OR (tk_json ->> 'user_id') = v_current_uid::text
+           OR (tk_json ->> 'auth_id') = v_current_uid::text
+           OR (v_current_email IS NOT NULL AND lower(tk_json ->> 'email') = lower(v_current_email))
+        LIMIT 1;
+
+        -- Dự phòng: Nếu chưa tìm thấy trong bảng taikhoan thì kiểm tra thêm trong JWT metadata
+        IF v_user_role IS NULL THEN
+            v_user_role := COALESCE(
+                auth.jwt() -> 'app_metadata' ->> 'role',
+                auth.jwt() -> 'user_metadata' ->> 'role'
+            );
+        END IF;
+
+        -- Chỉ cho phép 'Admin' hoặc 'BTV' (không phân biệt chữ hoa/chữ thường hay khoảng trắng thừa)
+        IF v_user_role IS NULL OR upper(btrim(v_user_role)) NOT IN ('ADMIN', 'BTV') THEN
+            RAISE EXCEPTION 'Truy cập bị từ chối: Tài khoản của bạn (Role: %) không có quyền xem lịch sử. Chỉ Admin hoặc BTV mới được phép.', COALESCE(v_user_role, 'Không xác định')
+                USING ERRCODE = '42501';
+        END IF;
+    END IF;
+
+    -- =====================================================================
+    -- BƯỚC 2: BĂM (HASH) KHÓA CHÍNH RA UUID V5 ĐỂ TÌM KIẾM QUA B-TREE INDEX
+    -- =====================================================================
+    IF p_id IS NOT NULL AND btrim(p_id) <> '' THEN
+        v_target_record_id := audit.to_record_id(
+            v_table_oid,
+            v_pkey_cols,
+            jsonb_build_object(v_pkey_cols[1], btrim(p_id))
+        );
+    END IF;
+
+    -- =====================================================================
+    -- BƯỚC 3: TRUY VẤN LỊCH SỬ & KẾT NỐI THÔNG TIN NGƯỜI THỰC HIỆN TỪ 'taikhoan'
+    -- =====================================================================
+    RETURN QUERY
+    SELECT 
+        rv.id AS log_id,
+        rv.ts AS thoi_gian,
+        rv.op::text AS hanh_dong,
+        rv.auth_uid AS nguoi_thuc_hien,
+        COALESCE(
+            tk_info.ten_hien_thi,
+            u.email::text,
+            'Hệ thống / SQL Editor'
+        ) AS ten_nguoi_thuc_hien,
+        tk_info.role_hien_thi AS vai_tro_nguoi_thuc_hien,
+        -- Tự động bóc tách chỉ những cột có giá trị bị thay đổi khi UPDATE
+        CASE 
+            WHEN rv.op = 'UPDATE' THEN (
+                SELECT COALESCE(
+                    jsonb_object_agg(
+                        n.key, 
+                        jsonb_build_object('old', rv.old_record -> n.key, 'new', n.value)
+                    ),
+                    '{}'::jsonb
+                )
+                FROM jsonb_each(rv.record) n
+                WHERE rv.old_record -> n.key IS DISTINCT FROM n.value
+            )
+            ELSE NULL
+        END AS thay_doi_chi_tiet,
+        rv.old_record AS du_lieu_cu,
+        rv.record AS du_lieu_moi
+    FROM audit.record_version rv
+    LEFT JOIN auth.users u ON u.id = rv.auth_uid
+    -- Lấy thêm thông tin Họ tên / Tên đăng nhập / Role của người sửa điểm từ bảng taikhoan
+    LEFT JOIN LATERAL (
+        SELECT 
+            COALESCE(
+                tk_j ->> 'ho_ten', 
+                tk_j ->> 'hoten', 
+                tk_j ->> 'full_name', 
+                tk_j ->> 'name', 
+                tk_j ->> 'ten', 
+                tk_j ->> 'username', 
+                tk_j ->> 'email'
+            ) AS ten_hien_thi,
+            COALESCE(tk_j ->> 'role', tk_j ->> 'vai_tro') AS role_hien_thi
+        FROM public.taikhoan tk
+        CROSS JOIN LATERAL to_jsonb(tk) AS tk_j
+        WHERE (tk_j ->> 'id') = rv.auth_uid::text
+           OR (tk_j ->> 'user_id') = rv.auth_uid::text
+           OR (tk_j ->> 'auth_id') = rv.auth_uid::text
+           OR (u.email IS NOT NULL AND lower(tk_j ->> 'email') = lower(u.email))
+        LIMIT 1
+    ) tk_info ON true
+    WHERE rv.table_oid = v_table_oid
+      AND (
+          v_target_record_id IS NULL 
+          OR rv.record_id = v_target_record_id 
+          OR rv.old_record_id = v_target_record_id
+      )
+    ORDER BY rv.ts DESC
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$$;
+
+
+ALTER FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) OWNER TO postgres;
+
+--
 -- Name: get_my_role(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
@@ -2030,40 +2167,49 @@ CREATE FUNCTION public.get_student_violation_stats_advanced(p_namhoc_id uuid, p_
     LANGUAGE plpgsql SECURITY DEFINER
     AS $$
 BEGIN
-  -- 1. ĐIỀU KIỆN TIÊN QUYẾT: BẮT BUỘC PHẢI TRUYỀN NĂM HỌC HIỆN TẠI
+  -- 1. Điều kiện tiên quyết: Bắt buộc phải có ID năm học
   IF p_namhoc_id IS NULL THEN
-    RAISE EXCEPTION 'Lỗi nghiêm ngặt: Tham số p_namhoc_id (Năm học hiện tại) là bắt buộc và không được để trống!';
+    RAISE EXCEPTION 'Lỗi nghiêm ngặt: Tham số p_namhoc_id là bắt buộc và không được để trống!';
   END IF;
 
   RETURN QUERY
   SELECT 
     dv.id AS doanvien_id,
     
-    -- Chuỗi tổng hợp Vi phạm chi tiết
+    -- Chuỗi tổng hợp Vi phạm: Ví dụ "Vắng không phép (-5) T1, Đi trễ (-2) T3"
     COALESCE(
       STRING_AGG(
         CASE 
           WHEN cd.diemtru > 0 OR cd.loaitieuchi ILIKE '%vi pham%' OR cd.loaitieuchi ILIKE '%vi phạm%'
-          THEN (cd.tentieuchi || ' (-' || cd.diemtru || ')')
+          THEN (
+            COALESCE(NULLIF(TRIM(cd.tentieuchi), ''), 'Lỗi vi phạm') || ' (-' || COALESCE(cd.diemtru::TEXT, '0') || ')' ||
+            CASE 
+              WHEN cd.tuan IS NOT NULL AND TRIM(cd.tuan) <> '' 
+              THEN ' T' || REGEXP_REPLACE(TRIM(cd.tuan), '^(tuần|tuan|t)\s*', '', 'i')
+              ELSE '' 
+            END
+          )
           ELSE NULL 
         END, 
         ', '
       ), ''
     ) AS vi_pham,
     
-    -- Chuỗi tổng hợp Thành tích chi tiết
+    -- Chuỗi tổng hợp Thành tích
     COALESCE(
       STRING_AGG(
         CASE 
           WHEN cd.diemcong > 0 OR cd.loaitieuchi ILIKE '%thanh tich%' OR cd.loaitieuchi ILIKE '%thành tích%'
-          THEN (cd.tentieuchi || ' (+' || cd.diemcong || ')')
+          THEN (
+            COALESCE(NULLIF(TRIM(cd.tentieuchi), ''), 'Thành tích') || ' (+' || COALESCE(cd.diemcong::TEXT, '0') || ')'
+          )
           ELSE NULL 
         END, 
         ', '
       ), ''
     ) AS thanh_tich,
     
-    -- Tổng điểm trừ (Ép kiểu ::NUMERIC)
+    -- Tổng điểm trừ
     COALESCE(SUM(
       CASE 
         WHEN cd.diemtru > 0 OR cd.loaitieuchi ILIKE '%vi pham%' OR cd.loaitieuchi ILIKE '%vi phạm%'
@@ -2072,7 +2218,7 @@ BEGIN
       END
     ), 0) AS tong_diem_tru,
     
-    -- Tổng điểm cộng (Ép kiểu ::NUMERIC)
+    -- Tổng điểm cộng
     COALESCE(SUM(
       CASE 
         WHEN cd.diemcong > 0 OR cd.loaitieuchi ILIKE '%thanh tich%' OR cd.loaitieuchi ILIKE '%thành tích%'
@@ -2081,16 +2227,14 @@ BEGIN
       END
     ), 0) AS tong_diem_cong
 
-  -- BẢO VỆ 1: CHỈ LẤY ĐOÀN VIÊN THUỘC ĐÚNG NĂM HỌC HIỆN TẠI
+  -- Lấy danh sách đoàn viên của đúng năm học
   FROM public.doanvien dv
   
-  -- BẢO VỆ 2: LEFT JOIN ĐẢM BẢO 100% HỌC SINH KHÔNG BỊ MẤT DÒNG
-  -- VÀ CHỈ LẤY BẢN GHI CHẤM ĐIỂM TRONG ĐÚNG NĂM HỌC HIỆN TẠI
+  -- LEFT JOIN với bảng chấm điểm để giữ nguyên 100% học sinh (kể cả học sinh chưa có lỗi)
   LEFT JOIN public.chamdiem cd 
          ON dv.id = cd.doanvienid 
         AND cd.namhoc = p_namhoc_id
         AND (
-          -- Nếu p_hocky là NULL, rỗng hoặc 'Cả năm' -> Lấy toàn bộ bản ghi trong năm học đó
           p_hocky IS NULL 
           OR TRIM(p_hocky) = ''
           OR LOWER(TRIM(p_hocky)) IN ('cả năm', 'canam', 'all', 'toàn năm', 'toannam')
@@ -2112,13 +2256,8 @@ BEGIN
         )
         
   WHERE 
-    -- ĐIỀU KIỆN TIÊN QUYẾT: DUY NHẤT LẤY HỌC SINH CỦA NĂM HỌC HIỆN TẠI
     dv.namhoc = p_namhoc_id
-    
-    -- Lọc theo Chi đoàn nếu có chỉ định (GVCN / BCH)
     AND (p_chidoan_id IS NULL OR dv.chidoan_id = p_chidoan_id)
-    
-    -- Lọc theo cá nhân Đoàn viên nếu học sinh tự xem
     AND (p_doanvien_id IS NULL OR dv.id = p_doanvien_id)
     
   GROUP BY dv.id;
@@ -3049,6 +3188,40 @@ CREATE TABLE public.github_settings (
 ALTER TABLE public.github_settings OWNER TO postgres;
 
 --
+-- Name: homthugopy; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.homthugopy (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    nam_hoc_id uuid,
+    namhoc character varying(50),
+    hocky character varying(20) NOT NULL,
+    chu_de character varying(100) NOT NULL,
+    che_do_danh_tinh character varying(30) DEFAULT 'cong_khai'::character varying NOT NULL,
+    tieu_de character varying(255) NOT NULL,
+    noi_dung text NOT NULL,
+    hinh_anh text[] DEFAULT ARRAY[]::text[],
+    nguoi_gui_id text,
+    ho_ten_nguoi_gui character varying(100),
+    chidoan_id text,
+    ten_chidoan character varying(50),
+    thoi_gian_gop_y timestamp with time zone DEFAULT now(),
+    trang_thai character varying(30) DEFAULT 'tiep_nhan'::character varying NOT NULL,
+    noi_dung_tra_loi text,
+    nguoi_tra_loi_id text,
+    ten_nguoi_tra_loi character varying(100),
+    thoi_gian_tra_loi timestamp with time zone,
+    cong_khai_cau_tra_loi boolean DEFAULT false,
+    ghi_chu text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    nguoi_nhan_gop_y character varying(50) DEFAULT 'Đoàn trường'::character varying
+);
+
+
+ALTER TABLE public.homthugopy OWNER TO postgres;
+
+--
 -- Name: namhoc; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -3403,7 +3576,8 @@ CREATE TABLE public.settings (
     diem_tb numeric DEFAULT 4,
     diem_yeu numeric DEFAULT 1,
     ti_trong_diem_tuan numeric DEFAULT 50,
-    ti_trong_diem_hoc_tap numeric DEFAULT 50
+    ti_trong_diem_hoc_tap numeric DEFAULT 50,
+    co_che_nhap_gio_hoc character varying(20) DEFAULT 'tiet'::character varying
 );
 
 
@@ -3484,6 +3658,13 @@ COMMENT ON COLUMN public.settings.ti_trong_diem_tuan IS 'Tỉ trọng % đóng g
 --
 
 COMMENT ON COLUMN public.settings.ti_trong_diem_hoc_tap IS 'Tỉ trọng % đóng góp của điểm trung bình giờ học tập vào tổng điểm thi đua chung';
+
+
+--
+-- Name: COLUMN settings.co_che_nhap_gio_hoc; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON COLUMN public.settings.co_che_nhap_gio_hoc IS 'Cơ chế nhập điểm giờ học: tiet (tính theo số tiết) hoặc tructiep (nhập trực tiếp điểm TB)';
 
 
 --
@@ -3735,6 +3916,14 @@ ALTER TABLE ONLY public.gio_hoc_tap
 
 ALTER TABLE ONLY public.github_settings
     ADD CONSTRAINT github_settings_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: homthugopy homthugopy_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.homthugopy
+    ADD CONSTRAINT homthugopy_pkey PRIMARY KEY (id);
 
 
 --
@@ -4088,6 +4277,62 @@ CREATE INDEX idx_dotptdoanvien_nam_hk ON public.dotptdoanvien USING btree (namho
 
 
 --
+-- Name: idx_homthugopy_che_do; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_homthugopy_che_do ON public.homthugopy USING btree (che_do_danh_tinh);
+
+
+--
+-- Name: idx_homthugopy_chu_de; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_homthugopy_chu_de ON public.homthugopy USING btree (chu_de);
+
+
+--
+-- Name: idx_homthugopy_hocky; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_homthugopy_hocky ON public.homthugopy USING btree (hocky);
+
+
+--
+-- Name: idx_homthugopy_nam_hoc; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_homthugopy_nam_hoc ON public.homthugopy USING btree (nam_hoc_id);
+
+
+--
+-- Name: idx_homthugopy_nguoi_gui; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_homthugopy_nguoi_gui ON public.homthugopy USING btree (nguoi_gui_id);
+
+
+--
+-- Name: idx_homthugopy_nguoi_nhan; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_homthugopy_nguoi_nhan ON public.homthugopy USING btree (nguoi_nhan_gop_y);
+
+
+--
+-- Name: idx_homthugopy_thoi_gian; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_homthugopy_thoi_gian ON public.homthugopy USING btree (thoi_gian_gop_y DESC);
+
+
+--
+-- Name: idx_homthugopy_trang_thai; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_homthugopy_trang_thai ON public.homthugopy USING btree (trang_thai);
+
+
+--
 -- Name: idx_namhoc_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
 --
 
@@ -4316,6 +4561,13 @@ CREATE INDEX ngay_3_5_idx_ptdoanvien_doanvien_id ON public.ptdoanvien USING btre
 --
 
 CREATE INDEX ngay_3_5_idx_ptdoanvien_dotdangki ON public.ptdoanvien USING btree (dotdangki);
+
+
+--
+-- Name: chamdiem audit_i_u_d; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER audit_i_u_d AFTER INSERT OR DELETE OR UPDATE ON public.chamdiem FOR EACH ROW EXECUTE FUNCTION audit.insert_update_delete_trigger();
 
 
 --
@@ -4669,6 +4921,14 @@ ALTER TABLE ONLY public.tuanhoc
 
 
 --
+-- Name: homthugopy homthugopy_nam_hoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.homthugopy
+    ADD CONSTRAINT homthugopy_nam_hoc_id_fkey FOREIGN KEY (nam_hoc_id) REFERENCES public.namhoc(id) ON DELETE CASCADE;
+
+
+--
 -- Name: phancong phancong_chamlop_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -4760,6 +5020,13 @@ CREATE POLICY "ADMIN full quyền" ON public.duytricsdl TO authenticated USING (
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.github_settings TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
+
+
+--
+-- Name: homthugopy ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "ADMIN full quyền" ON public.homthugopy TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
@@ -4917,6 +5184,27 @@ CREATE POLICY "BCH có quyền cập nhật" ON public.doanvien FOR UPDATE TO au
 
 
 --
+-- Name: homthugopy BGH cập nhật toàn bộ; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "BGH cập nhật toàn bộ" ON public.homthugopy FOR UPDATE TO authenticated USING (((public.get_auth_role() = 'BGH'::text) OR (((auth.jwt() -> 'user_metadata'::text) ->> 'role'::text) = 'BGH'::text) OR (lower(COALESCE((auth.jwt() ->> 'email'::text), ''::text)) ~ '(bgh|hieutruong|giamhieu)'::text))) WITH CHECK (((public.get_auth_role() = 'BGH'::text) OR (((auth.jwt() -> 'user_metadata'::text) ->> 'role'::text) = 'BGH'::text) OR (lower(COALESCE((auth.jwt() ->> 'email'::text), ''::text)) ~ '(bgh|hieutruong|giamhieu)'::text)));
+
+
+--
+-- Name: homthugopy BGH xem toàn bộ; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "BGH xem toàn bộ" ON public.homthugopy FOR SELECT TO authenticated USING ((public.get_auth_role() = 'BGH'::text));
+
+
+--
+-- Name: homthugopy BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "BTV full quyền" ON public.homthugopy TO authenticated USING ((public.get_auth_role() = 'BTV'::text)) WITH CHECK ((public.get_auth_role() = 'BTV'::text));
+
+
+--
 -- Name: duytricsdl Công cộng được cập nhật; Type: POLICY; Schema: public; Owner: postgres
 --
 
@@ -4928,6 +5216,27 @@ CREATE POLICY "Công cộng được cập nhật" ON public.duytricsdl FOR UPDA
 --
 
 CREATE POLICY "Công cộng được xem" ON public.duytricsdl FOR SELECT USING (true);
+
+
+--
+-- Name: homthugopy Học sinh gửi góp ý; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Học sinh gửi góp ý" ON public.homthugopy FOR INSERT TO authenticated WITH CHECK (true);
+
+
+--
+-- Name: homthugopy Học sinh sửa góp ý khi chưa xử lý; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Học sinh sửa góp ý khi chưa xử lý" ON public.homthugopy FOR UPDATE TO authenticated USING (((nguoi_gui_id = (auth.uid())::text) AND ((trang_thai)::text = 'tiep_nhan'::text))) WITH CHECK (((nguoi_gui_id = (auth.uid())::text) AND ((trang_thai)::text = 'tiep_nhan'::text)));
+
+
+--
+-- Name: homthugopy Học sinh xem góp ý của mình và công khai; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY "Học sinh xem góp ý của mình và công khai" ON public.homthugopy FOR SELECT TO authenticated USING (((nguoi_gui_id = (auth.uid())::text) OR (cong_khai_cau_tra_loi = true)));
 
 
 --
@@ -4991,6 +5300,12 @@ ALTER TABLE public.gio_hoc_tap ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.github_settings ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: homthugopy; Type: ROW SECURITY; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.homthugopy ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: namhoc; Type: ROW SECURITY; Schema: public; Owner: postgres
@@ -5384,6 +5699,12 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 
 
 --
+-- Name: FUNCTION get_chamdiem_history(p_id text, p_limit integer, p_offset integer); Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: FUNCTION get_my_role(); Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -5552,6 +5873,12 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 
 
 --
+-- Name: TABLE homthugopy; Type: ACL; Schema: public; Owner: postgres
+--
+
+
+
+--
 -- Name: TABLE namhoc; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -5699,7 +6026,7 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 -- PostgreSQL database dump complete
 --
 
-\unrestrict fWSjDYPgGDUCxfUQbLubKMeBywntHqleKsmdPuAkreMXaXLjfgQhXra9fJ2sxVK
+\unrestrict Czv1ObUcsBCSfJknx9b3moTGpOXNUPSHjWNzLtOB44ghxse5MPxbvV1cQ8qO1OX
 
 
 -- 1. Khởi tạo tài khoản quản trị
