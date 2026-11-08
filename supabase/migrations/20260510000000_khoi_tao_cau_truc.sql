@@ -1,8 +1,17 @@
+-- =========================================================================
+-- GENERATED APPLICATION SCHEMA SNAPSHOT
+-- Bao gồm toàn bộ custom/application schemas của SOURCE_DB_URL.
+-- Không chứa dữ liệu mẫu/seed.
+-- Application schemas:
+--   - public
+--   - audit
+-- =========================================================================
+
 --
 -- PostgreSQL database dump
 --
 
-\restrict Czv1ObUcsBCSfJknx9b3moTGpOXNUPSHjWNzLtOB44ghxse5MPxbvV1cQ8qO1OX
+\restrict hkCLdkjhQWdbeRkGV1bg9MeX6qJoPKBkZR2bHVGAAasu8IeGa2nKUwtnxAswSAu
 
 -- Dumped from database version 17.11
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg26.04+2)
@@ -20,21 +29,209 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- Name: public; Type: SCHEMA; Schema: -; Owner: pg_database_owner
+-- Name: audit; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA audit;
+
+
+--
+-- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
 
 
 
-
 --
--- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: pg_database_owner
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
 --
 
 COMMENT ON SCHEMA public IS 'standard public schema';
 
 
 --
--- Name: calculate_scores_advanced(uuid, uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: operation; Type: TYPE; Schema: audit; Owner: -
+--
+
+CREATE TYPE audit.operation AS ENUM (
+    'INSERT',
+    'UPDATE',
+    'DELETE',
+    'TRUNCATE'
+);
+
+
+--
+-- Name: cleanup_old_logs(integer, integer); Type: FUNCTION; Schema: audit; Owner: -
+--
+
+CREATE FUNCTION audit.cleanup_old_logs(retention_days integer DEFAULT 30, batch_size integer DEFAULT 10000) RETURNS bigint
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'audit'
+    AS $$
+DECLARE
+    v_deleted_total bigint := 0;
+    v_deleted_batch int;
+    v_cutoff_date timestamptz;
+BEGIN
+    v_cutoff_date := now() - make_interval(days => retention_days);
+
+    LOOP
+        WITH rows_to_delete AS (
+            SELECT id
+            FROM audit.record_version
+            WHERE ts < v_cutoff_date
+            LIMIT batch_size
+            FOR UPDATE SKIP LOCKED
+        )
+        DELETE FROM audit.record_version rv
+        USING rows_to_delete rtd
+        WHERE rv.id = rtd.id;
+
+        GET DIAGNOSTICS v_deleted_batch = ROW_COUNT;
+        v_deleted_total := v_deleted_total + v_deleted_batch;
+
+        EXIT WHEN v_deleted_batch < batch_size;
+    END LOOP;
+
+    RETURN v_deleted_total;
+END;
+$$;
+
+
+--
+-- Name: disable_tracking(regclass); Type: FUNCTION; Schema: audit; Owner: -
+--
+
+CREATE FUNCTION audit.disable_tracking(tbl regclass) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'audit'
+    AS $$
+BEGIN
+    EXECUTE format('DROP TRIGGER IF EXISTS audit_i_u_d ON %s;', tbl);
+END;
+$$;
+
+
+--
+-- Name: enable_tracking(regclass); Type: FUNCTION; Schema: audit; Owner: -
+--
+
+CREATE FUNCTION audit.enable_tracking(tbl regclass) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'audit'
+    AS $$
+DECLARE
+    statement_row text := format('
+        CREATE TRIGGER audit_i_u_d
+        AFTER INSERT OR UPDATE OR DELETE ON %s
+        FOR EACH ROW EXECUTE FUNCTION audit.insert_update_delete_trigger();',
+        tbl
+    );
+    pkey_cols text[] := audit.primary_key_columns(tbl);
+BEGIN
+    IF pkey_cols = ARRAY[]::text[] THEN
+        RAISE EXCEPTION 'Bảng % bắt buộc phải có Khóa chính (Primary Key) để bật lịch sử', tbl;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = tbl AND tgname = 'audit_i_u_d') THEN
+        EXECUTE statement_row;
+    END IF;
+END;
+$$;
+
+
+--
+-- Name: insert_update_delete_trigger(); Type: FUNCTION; Schema: audit; Owner: -
+--
+
+CREATE FUNCTION audit.insert_update_delete_trigger() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'audit'
+    AS $$
+DECLARE
+    pkey_cols text[] := audit.primary_key_columns(TG_RELID);
+    record_jsonb jsonb := to_jsonb(NEW);
+    record_id uuid := audit.to_record_id(TG_RELID, pkey_cols, record_jsonb);
+    old_record_jsonb jsonb := to_jsonb(OLD);
+    old_record_id uuid := audit.to_record_id(TG_RELID, pkey_cols, old_record_jsonb);
+BEGIN
+    -- Tối ưu bổ sung: Nếu lệnh UPDATE không làm thay đổi bất kỳ giá trị nào thì bỏ qua, không ghi rác
+    IF TG_OP = 'UPDATE' AND record_jsonb = old_record_jsonb THEN
+        RETURN NEW;
+    END IF;
+
+    INSERT INTO audit.record_version(
+        record_id,
+        old_record_id,
+        op,
+        table_oid,
+        table_schema,
+        table_name,
+        record,
+        old_record,
+        auth_uid,
+        auth_role
+    )
+    VALUES (
+        record_id,
+        old_record_id,
+        TG_OP::audit.operation,
+        TG_RELID,
+        TG_TABLE_SCHEMA,
+        TG_TABLE_NAME,
+        record_jsonb,
+        old_record_jsonb,
+        auth.uid(),
+        auth.role()
+    );
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+
+--
+-- Name: primary_key_columns(oid); Type: FUNCTION; Schema: audit; Owner: -
+--
+
+CREATE FUNCTION audit.primary_key_columns(entity_oid oid) RETURNS text[]
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'audit'
+    AS $_$
+    SELECT COALESCE(
+        array_agg(pa.attname::text ORDER BY pa.attnum),
+        ARRAY[]::text[]
+    )
+    FROM pg_index pi
+    JOIN pg_attribute pa ON pi.indrelid = pa.attrelid AND pa.attnum = ANY(pi.indkey)
+    WHERE pi.indrelid = $1 AND pi.indisprimary;
+$_$;
+
+
+--
+-- Name: to_record_id(oid, text[], jsonb); Type: FUNCTION; Schema: audit; Owner: -
+--
+
+CREATE FUNCTION audit.to_record_id(entity_oid oid, pkey_cols text[], rec jsonb) RETURNS uuid
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'extensions', 'audit'
+    AS $_$
+    SELECT CASE
+        WHEN rec IS NULL THEN NULL
+        WHEN pkey_cols = ARRAY[]::text[] THEN extensions.uuid_generate_v4()
+        ELSE (
+            SELECT extensions.uuid_generate_v5(
+                'fd62bc3d-8d6e-43c2-919c-802ba3762271'::uuid,
+                ( jsonb_build_array(to_jsonb($1)) || jsonb_agg($3 ->> key_) )::text
+            )
+            FROM unnest($2) x(key_)
+        )
+    END;
+$_$;
+
+
+--
+-- Name: calculate_scores_advanced(uuid, uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid DEFAULT NULL::uuid, p_doanvien_id uuid DEFAULT NULL::uuid) RETURNS TABLE(doanvien_id uuid, diem_hk1 numeric, diem_hk2 numeric, diem_cn numeric)
@@ -188,10 +385,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid, p_doanvien_id uuid) OWNER TO postgres;
-
 --
--- Name: calculate_scores_by_year(uuid); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: calculate_scores_by_year(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.calculate_scores_by_year(p_namhoc_id uuid) RETURNS TABLE(doanvien_id uuid, diem_hk1 numeric, diem_hk2 numeric, diem_cn numeric)
@@ -246,10 +441,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.calculate_scores_by_year(p_namhoc_id uuid) OWNER TO postgres;
-
 --
--- Name: check_user_mfa_status(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: check_user_mfa_status(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.check_user_mfa_status() RETURNS boolean
@@ -263,10 +456,8 @@ CREATE FUNCTION public.check_user_mfa_status() RETURNS boolean
 $$;
 
 
-ALTER FUNCTION public.check_user_mfa_status() OWNER TO postgres;
-
 --
--- Name: fn_dem_du_lieu_lien_quan_tuan(uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_dem_du_lieu_lien_quan_tuan(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid) RETURNS jsonb
@@ -355,10 +546,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid) OWNER TO postgres;
-
 --
--- Name: fn_dong_bo_taikhoan_sang_auth_users(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_dong_bo_taikhoan_sang_auth_users(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users() RETURNS trigger
@@ -566,10 +755,8 @@ END;
 $_$;
 
 
-ALTER FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users() OWNER TO postgres;
-
 --
--- Name: fn_is_mfa_enabled(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_is_mfa_enabled(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_is_mfa_enabled() RETURNS boolean
@@ -585,10 +772,8 @@ CREATE FUNCTION public.fn_is_mfa_enabled() RETURNS boolean
 $$;
 
 
-ALTER FUNCTION public.fn_is_mfa_enabled() OWNER TO postgres;
-
 --
--- Name: fn_kiem_tra_an_ninh_taikhoan(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_kiem_tra_an_ninh_taikhoan(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_kiem_tra_an_ninh_taikhoan() RETURNS trigger
@@ -669,10 +854,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.fn_kiem_tra_an_ninh_taikhoan() OWNER TO postgres;
-
 --
--- Name: fn_kiem_tra_va_khoa_tuan(uuid, text, text, boolean); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_kiem_tra_va_khoa_tuan(uuid, text, text, boolean); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid DEFAULT NULL::uuid, p_hocky text DEFAULT NULL::text, p_tuan text DEFAULT NULL::text, p_force boolean DEFAULT false) RETURNS jsonb
@@ -685,10 +868,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid, p_hocky text, p_tuan text, p_force boolean) OWNER TO postgres;
-
 --
--- Name: fn_kiem_tra_xu_phat_tuan_thu_cong(text, text, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_kiem_tra_xu_phat_tuan_thu_cong(text, text, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text DEFAULT NULL::text, p_namhoc_id uuid DEFAULT NULL::uuid) RETURNS jsonb
@@ -836,10 +1017,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text, p_namhoc_id uuid) OWNER TO postgres;
-
 --
--- Name: fn_tu_dong_bam_mat_khau_taikhoan(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_tu_dong_bam_mat_khau_taikhoan(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() RETURNS trigger
@@ -860,10 +1039,8 @@ END;
 $_$;
 
 
-ALTER FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() OWNER TO postgres;
-
 --
--- Name: fn_tu_dong_khoa_tuan(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_tu_dong_khoa_tuan(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_tu_dong_khoa_tuan() RETURNS jsonb
@@ -985,10 +1162,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.fn_tu_dong_khoa_tuan() OWNER TO postgres;
-
 --
--- Name: fn_tu_dong_khoa_tuan_va_xu_phat(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_tu_dong_khoa_tuan_va_xu_phat(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat() RETURNS jsonb
@@ -1321,10 +1496,8 @@ END;
 $_$;
 
 
-ALTER FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat() OWNER TO postgres;
-
 --
--- Name: fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) RETURNS jsonb
@@ -1548,10 +1721,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) OWNER TO postgres;
-
 --
--- Name: fn_xoa_tuan_hoc_toan_dien(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_xoa_tuan_hoc_toan_dien(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) RETURNS jsonb
@@ -1688,10 +1859,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) OWNER TO postgres;
-
 --
--- Name: fn_xu_phat_thu_cong(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: fn_xu_phat_thu_cong(uuid, uuid, text, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) RETURNS jsonb
@@ -1911,10 +2080,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) OWNER TO postgres;
-
 --
--- Name: get_auth_chidoan_id(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_auth_chidoan_id(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_auth_chidoan_id() RETURNS uuid
@@ -1927,10 +2094,8 @@ CREATE FUNCTION public.get_auth_chidoan_id() RETURNS uuid
 $$;
 
 
-ALTER FUNCTION public.get_auth_chidoan_id() OWNER TO postgres;
-
 --
--- Name: get_auth_doanvien_id(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_auth_doanvien_id(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_auth_doanvien_id() RETURNS uuid
@@ -1943,10 +2108,8 @@ CREATE FUNCTION public.get_auth_doanvien_id() RETURNS uuid
 $$;
 
 
-ALTER FUNCTION public.get_auth_doanvien_id() OWNER TO postgres;
-
 --
--- Name: get_auth_role(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_auth_role(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_auth_role() RETURNS text
@@ -1959,10 +2122,8 @@ CREATE FUNCTION public.get_auth_role() RETURNS text
 $$;
 
 
-ALTER FUNCTION public.get_auth_role() OWNER TO postgres;
-
 --
--- Name: get_chamdiem_history(text, integer, integer); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_chamdiem_history(text, integer, integer); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_chamdiem_history(p_id text DEFAULT NULL::text, p_limit integer DEFAULT 50, p_offset integer DEFAULT 0) RETURNS TABLE(log_id bigint, thoi_gian timestamp with time zone, hanh_dong text, nguoi_thuc_hien uuid, ten_nguoi_thuc_hien text, vai_tro_nguoi_thuc_hien text, thay_doi_chi_tiet jsonb, du_lieu_cu jsonb, du_lieu_moi jsonb)
@@ -2096,10 +2257,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) OWNER TO postgres;
-
 --
--- Name: get_my_role(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_my_role(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_my_role() RETURNS text
@@ -2115,10 +2274,8 @@ CREATE FUNCTION public.get_my_role() RETURNS text
 $$;
 
 
-ALTER FUNCTION public.get_my_role() OWNER TO postgres;
-
 --
--- Name: get_secure_chidoan_id(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_secure_chidoan_id(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_secure_chidoan_id() RETURNS uuid
@@ -2128,10 +2285,8 @@ CREATE FUNCTION public.get_secure_chidoan_id() RETURNS uuid
 $$;
 
 
-ALTER FUNCTION public.get_secure_chidoan_id() OWNER TO postgres;
-
 --
--- Name: get_secure_doanvien_id(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_secure_doanvien_id(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_secure_doanvien_id() RETURNS uuid
@@ -2141,10 +2296,8 @@ CREATE FUNCTION public.get_secure_doanvien_id() RETURNS uuid
 $$;
 
 
-ALTER FUNCTION public.get_secure_doanvien_id() OWNER TO postgres;
-
 --
--- Name: get_secure_role(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_secure_role(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_secure_role() RETURNS text
@@ -2157,10 +2310,8 @@ CREATE FUNCTION public.get_secure_role() RETURNS text
 $$;
 
 
-ALTER FUNCTION public.get_secure_role() OWNER TO postgres;
-
 --
--- Name: get_student_violation_stats_advanced(uuid, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: get_student_violation_stats_advanced(uuid, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text DEFAULT NULL::text, p_chidoan_id uuid DEFAULT NULL::uuid, p_doanvien_id uuid DEFAULT NULL::uuid) RETURNS TABLE(doanvien_id uuid, vi_pham text, thanh_tich text, tong_diem_tru numeric, tong_diem_cong numeric)
@@ -2265,10 +2416,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text, p_chidoan_id uuid, p_doanvien_id uuid) OWNER TO postgres;
-
 --
--- Name: handle_chi_doan_deletion(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: handle_chi_doan_deletion(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.handle_chi_doan_deletion() RETURNS trigger
@@ -2284,10 +2433,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.handle_chi_doan_deletion() OWNER TO postgres;
-
 --
--- Name: handle_post_like(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: handle_post_like(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.handle_post_like() RETURNS trigger
@@ -2304,10 +2451,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.handle_post_like() OWNER TO postgres;
-
 --
--- Name: handle_update_likes_count(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: handle_update_likes_count(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.handle_update_likes_count() RETURNS trigger
@@ -2324,10 +2469,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.handle_update_likes_count() OWNER TO postgres;
-
 --
--- Name: rpc_admin_reset_user_mfa(text, text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: rpc_admin_reset_user_mfa(text, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.rpc_admin_reset_user_mfa(p_user_id text DEFAULT NULL::text, p_username text DEFAULT NULL::text) RETURNS void
@@ -2422,10 +2565,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.rpc_admin_reset_user_mfa(p_user_id text, p_username text) OWNER TO postgres;
-
 --
--- Name: rpc_authenticate_user(text, text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: rpc_authenticate_user(text, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.rpc_authenticate_user(p_username text, p_password text) RETURNS jsonb
@@ -2481,10 +2622,8 @@ END;
 $_$;
 
 
-ALTER FUNCTION public.rpc_authenticate_user(p_username text, p_password text) OWNER TO postgres;
-
 --
--- Name: rpc_create_account_secure(text, text, text, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: rpc_create_account_secure(text, text, text, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text DEFAULT 'DV'::text, p_chidoan_id uuid DEFAULT NULL::uuid, p_doanvien_id uuid DEFAULT NULL::uuid) RETURNS json
@@ -2539,10 +2678,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) OWNER TO postgres;
-
 --
--- Name: rpc_create_account_secure(text, text, text, text, uuid, uuid, text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: rpc_create_account_secure(text, text, text, text, uuid, uuid, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text DEFAULT 'DV'::text, p_chidoan_id uuid DEFAULT NULL::uuid, p_namhoc uuid DEFAULT NULL::uuid, p_sdt text DEFAULT NULL::text) RETURNS json
@@ -2592,10 +2729,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_namhoc uuid, p_sdt text) OWNER TO postgres;
-
 --
--- Name: rpc_delete_auth_users_by_usernames(text[]); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: rpc_delete_auth_users_by_usernames(text[]); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.rpc_delete_auth_users_by_usernames(p_usernames text[]) RETURNS void
@@ -2630,10 +2765,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.rpc_delete_auth_users_by_usernames(p_usernames text[]) OWNER TO postgres;
-
 --
--- Name: rpc_get_user_by_username(text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: rpc_get_user_by_username(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.rpc_get_user_by_username(p_username text) RETURNS json
@@ -2668,10 +2801,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.rpc_get_user_by_username(p_username text) OWNER TO postgres;
-
 --
--- Name: rpc_tao_tai_khoan_an_toan(text, text, text, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: rpc_tao_tai_khoan_an_toan(text, text, text, text, uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text DEFAULT 'DV'::text, p_chidoan_id uuid DEFAULT NULL::uuid, p_doanvien_id uuid DEFAULT NULL::uuid) RETURNS json
@@ -2723,10 +2854,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) OWNER TO postgres;
-
 --
--- Name: save_user_backup_codes(text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: save_user_backup_codes(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.save_user_backup_codes(p_encrypted_codes text) RETURNS boolean
@@ -2754,10 +2883,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.save_user_backup_codes(p_encrypted_codes text) OWNER TO postgres;
-
 --
--- Name: trigger_update_login_stats(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: trigger_update_login_stats(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.trigger_update_login_stats() RETURNS trigger
@@ -2781,10 +2908,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.trigger_update_login_stats() OWNER TO postgres;
-
 --
--- Name: update_likes_count(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: update_likes_count(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.update_likes_count() RETURNS trigger
@@ -2801,10 +2926,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.update_likes_count() OWNER TO postgres;
-
 --
--- Name: update_modified_column(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: update_modified_column(); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.update_modified_column() RETURNS trigger
@@ -2817,10 +2940,8 @@ END;
 $$;
 
 
-ALTER FUNCTION public.update_modified_column() OWNER TO postgres;
-
 --
--- Name: verify_and_consume_backup_code(text); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: verify_and_consume_backup_code(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.verify_and_consume_backup_code(p_code text) RETURNS jsonb
@@ -2865,14 +2986,51 @@ END;
 $$;
 
 
-ALTER FUNCTION public.verify_and_consume_backup_code(p_code text) OWNER TO postgres;
-
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
 --
--- Name: activity_logs; Type: TABLE; Schema: public; Owner: postgres
+-- Name: record_version; Type: TABLE; Schema: audit; Owner: -
+--
+
+CREATE TABLE audit.record_version (
+    id bigint NOT NULL,
+    record_id uuid,
+    old_record_id uuid,
+    op audit.operation NOT NULL,
+    ts timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    table_oid oid NOT NULL,
+    table_schema name NOT NULL,
+    table_name name NOT NULL,
+    record jsonb,
+    old_record jsonb,
+    auth_uid uuid DEFAULT auth.uid(),
+    auth_role text DEFAULT auth.role()
+);
+
+
+--
+-- Name: record_version_id_seq; Type: SEQUENCE; Schema: audit; Owner: -
+--
+
+CREATE SEQUENCE audit.record_version_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: record_version_id_seq; Type: SEQUENCE OWNED BY; Schema: audit; Owner: -
+--
+
+ALTER SEQUENCE audit.record_version_id_seq OWNED BY audit.record_version.id;
+
+
+--
+-- Name: activity_logs; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.activity_logs (
@@ -2891,10 +3049,8 @@ CREATE TABLE public.activity_logs (
 );
 
 
-ALTER TABLE public.activity_logs OWNER TO postgres;
-
 --
--- Name: cauhinh_tieuchi_xet_thidua; Type: TABLE; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.cauhinh_tieuchi_xet_thidua (
@@ -2951,10 +3107,8 @@ CREATE TABLE public.cauhinh_tieuchi_xet_thidua (
 );
 
 
-ALTER TABLE public.cauhinh_tieuchi_xet_thidua OWNER TO postgres;
-
 --
--- Name: chamdiem; Type: TABLE; Schema: public; Owner: postgres
+-- Name: chamdiem; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.chamdiem (
@@ -2981,10 +3135,8 @@ CREATE TABLE public.chamdiem (
 );
 
 
-ALTER TABLE public.chamdiem OWNER TO postgres;
-
 --
--- Name: doanvien; Type: TABLE; Schema: public; Owner: postgres
+-- Name: doanvien; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.doanvien (
@@ -3012,31 +3164,29 @@ CREATE TABLE public.doanvien (
 );
 
 
-ALTER TABLE public.doanvien OWNER TO postgres;
-
 --
--- Name: COLUMN doanvien.sothedoan; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN doanvien.sothedoan; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.doanvien.sothedoan IS 'Số thẻ đoàn viên';
 
 
 --
--- Name: COLUMN doanvien.phuongtien; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN doanvien.phuongtien; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.doanvien.phuongtien IS 'Sử dụng phương tiện di chuyển';
 
 
 --
--- Name: COLUMN doanvien.thongtinphuongtien; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN doanvien.thongtinphuongtien; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.doanvien.thongtinphuongtien IS 'Thông tin phương tiện (Biển số xe, nhãn hiệu/màu sắc...)';
 
 
 --
--- Name: dotptdoanvien; Type: TABLE; Schema: public; Owner: postgres
+-- Name: dotptdoanvien; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.dotptdoanvien (
@@ -3054,10 +3204,8 @@ CREATE TABLE public.dotptdoanvien (
 );
 
 
-ALTER TABLE public.dotptdoanvien OWNER TO postgres;
-
 --
--- Name: duytricsdl; Type: TABLE; Schema: public; Owner: postgres
+-- Name: duytricsdl; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.duytricsdl (
@@ -3069,10 +3217,8 @@ CREATE TABLE public.duytricsdl (
 );
 
 
-ALTER TABLE public.duytricsdl OWNER TO postgres;
-
 --
--- Name: gio_hoc_tap; Type: TABLE; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.gio_hoc_tap (
@@ -3095,80 +3241,78 @@ CREATE TABLE public.gio_hoc_tap (
 );
 
 
-ALTER TABLE public.gio_hoc_tap OWNER TO postgres;
-
 --
--- Name: TABLE gio_hoc_tap; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: TABLE gio_hoc_tap; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON TABLE public.gio_hoc_tap IS 'Bảng quản lý giờ học tập và điểm trung bình học tập của Chi đoàn theo tuần và năm học';
 
 
 --
--- Name: COLUMN gio_hoc_tap.namhoc_id; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.namhoc_id; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.namhoc_id IS 'Liên kết với năm học hiện tại';
 
 
 --
--- Name: COLUMN gio_hoc_tap.chidoan_id; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.chidoan_id; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.chidoan_id IS 'Liên kết với Chi đoàn được xếp loại giờ học';
 
 
 --
--- Name: COLUMN gio_hoc_tap.tuan_id; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.tuan_id; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.tuan_id IS 'Liên kết với tuần học tương ứng';
 
 
 --
--- Name: COLUMN gio_hoc_tap.diem_tot_cauhinh; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.diem_tot_cauhinh; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.diem_tot_cauhinh IS 'Điểm cấu hình của giờ Tốt tại thời điểm nhập';
 
 
 --
--- Name: COLUMN gio_hoc_tap.diem_kha_cauhinh; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.diem_kha_cauhinh; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.diem_kha_cauhinh IS 'Điểm cấu hình của giờ Khá tại thời điểm nhập';
 
 
 --
--- Name: COLUMN gio_hoc_tap.diem_tb_cauhinh; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.diem_tb_cauhinh; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.diem_tb_cauhinh IS 'Điểm cấu hình của giờ Trung bình tại thời điểm nhập';
 
 
 --
--- Name: COLUMN gio_hoc_tap.diem_yeu_cauhinh; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.diem_yeu_cauhinh; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.diem_yeu_cauhinh IS 'Điểm cấu hình của giờ Yếu tại thời điểm nhập';
 
 
 --
--- Name: COLUMN gio_hoc_tap.diem_tb_hoc_tap; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.diem_tb_hoc_tap; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.diem_tb_hoc_tap IS 'Điểm trung bình học tập thực tế cuối cùng của tuần';
 
 
 --
--- Name: COLUMN gio_hoc_tap.hocky; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN gio_hoc_tap.hocky; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.gio_hoc_tap.hocky IS 'Học kỳ diễn ra tuần học tập (ví dụ: HK1, HK2)';
 
 
 --
--- Name: github_settings; Type: TABLE; Schema: public; Owner: postgres
+-- Name: github_settings; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.github_settings (
@@ -3185,10 +3329,8 @@ CREATE TABLE public.github_settings (
 );
 
 
-ALTER TABLE public.github_settings OWNER TO postgres;
-
 --
--- Name: homthugopy; Type: TABLE; Schema: public; Owner: postgres
+-- Name: homthugopy; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.homthugopy (
@@ -3219,10 +3361,8 @@ CREATE TABLE public.homthugopy (
 );
 
 
-ALTER TABLE public.homthugopy OWNER TO postgres;
-
 --
--- Name: namhoc; Type: TABLE; Schema: public; Owner: postgres
+-- Name: namhoc; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.namhoc (
@@ -3235,10 +3375,8 @@ CREATE TABLE public.namhoc (
 );
 
 
-ALTER TABLE public.namhoc OWNER TO postgres;
-
 --
--- Name: phancong; Type: TABLE; Schema: public; Owner: postgres
+-- Name: phancong; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.phancong (
@@ -3255,10 +3393,8 @@ CREATE TABLE public.phancong (
 );
 
 
-ALTER TABLE public.phancong OWNER TO postgres;
-
 --
--- Name: phanquyen; Type: TABLE; Schema: public; Owner: postgres
+-- Name: phanquyen; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.phanquyen (
@@ -3277,31 +3413,29 @@ CREATE TABLE public.phanquyen (
 );
 
 
-ALTER TABLE public.phanquyen OWNER TO postgres;
-
 --
--- Name: TABLE phanquyen; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: TABLE phanquyen; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON TABLE public.phanquyen IS 'Bảng cấu hình phân quyền động cho hệ thống';
 
 
 --
--- Name: COLUMN phanquyen.doi_tuong; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN phanquyen.doi_tuong; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.phanquyen.doi_tuong IS 'Vai trò của người dùng (Admin, BTV, BCH, BT, DV)';
 
 
 --
--- Name: COLUMN phanquyen.tab_chuc_nang; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN phanquyen.tab_chuc_nang; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.phanquyen.tab_chuc_nang IS 'Mã tab chức năng trên giao diện';
 
 
 --
--- Name: phanquyen_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+-- Name: phanquyen_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
 ALTER TABLE public.phanquyen ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
@@ -3315,7 +3449,7 @@ ALTER TABLE public.phanquyen ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTIT
 
 
 --
--- Name: ptdoanvien; Type: TABLE; Schema: public; Owner: postgres
+-- Name: ptdoanvien; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.ptdoanvien (
@@ -3334,10 +3468,8 @@ CREATE TABLE public.ptdoanvien (
 );
 
 
-ALTER TABLE public.ptdoanvien OWNER TO postgres;
-
 --
--- Name: push_subscriptions; Type: TABLE; Schema: public; Owner: postgres
+-- Name: push_subscriptions; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.push_subscriptions (
@@ -3351,10 +3483,8 @@ CREATE TABLE public.push_subscriptions (
 );
 
 
-ALTER TABLE public.push_subscriptions OWNER TO postgres;
-
 --
--- Name: ql_baocao; Type: TABLE; Schema: public; Owner: postgres
+-- Name: ql_baocao; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.ql_baocao (
@@ -3384,80 +3514,78 @@ CREATE TABLE public.ql_baocao (
 );
 
 
-ALTER TABLE public.ql_baocao OWNER TO postgres;
-
 --
--- Name: COLUMN ql_baocao.config_noi_dung1; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung1; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung1 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 1';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung2; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung2; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung2 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 2';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung3; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung3; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung3 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 3';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung4; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung4; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung4 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 4';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung5; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung5; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung5 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 5';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung6; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung6; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung6 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 6';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung7; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung7; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung7 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 7';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung8; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung8; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung8 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 8';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung9; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung9; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung9 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 9';
 
 
 --
--- Name: COLUMN ql_baocao.config_noi_dung10; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_baocao.config_noi_dung10; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_baocao.config_noi_dung10 IS 'Cấu hình nâng cao (tiêu đề, kiểu, bắt buộc, options, enabled) cho ô nhập Nội dung 10';
 
 
 --
--- Name: ql_nop_bc; Type: TABLE; Schema: public; Owner: postgres
+-- Name: ql_nop_bc; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.ql_nop_bc (
@@ -3486,17 +3614,15 @@ CREATE TABLE public.ql_nop_bc (
 );
 
 
-ALTER TABLE public.ql_nop_bc OWNER TO postgres;
-
 --
--- Name: COLUMN ql_nop_bc.danh_sach_anh; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN ql_nop_bc.danh_sach_anh; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.ql_nop_bc.danh_sach_anh IS 'Danh sách liên kết các ảnh minh chứng tải lên R2, phân tách bằng dấu phẩy';
 
 
 --
--- Name: qlchidoan; Type: TABLE; Schema: public; Owner: postgres
+-- Name: qlchidoan; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.qlchidoan (
@@ -3515,24 +3641,22 @@ CREATE TABLE public.qlchidoan (
 );
 
 
-ALTER TABLE public.qlchidoan OWNER TO postgres;
-
 --
--- Name: COLUMN qlchidoan.he_so_tru; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN qlchidoan.he_so_tru; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.qlchidoan.he_so_tru IS 'Hệ số nhân điểm trừ riêng biệt cho từng Chi đoàn';
 
 
 --
--- Name: COLUMN qlchidoan.he_so_cong; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN qlchidoan.he_so_cong; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.qlchidoan.he_so_cong IS 'Hệ số nhân điểm cộng riêng biệt cho từng Chi đoàn';
 
 
 --
--- Name: settings; Type: TABLE; Schema: public; Owner: postgres
+-- Name: settings; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.settings (
@@ -3581,94 +3705,92 @@ CREATE TABLE public.settings (
 );
 
 
-ALTER TABLE public.settings OWNER TO postgres;
-
 --
--- Name: COLUMN settings.autopenaltytime; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.autopenaltytime; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.autopenaltytime IS 'Giờ kiểm tra xử phạt tự động vào Chủ Nhật';
 
 
 --
--- Name: COLUMN settings.autopenaltypoints; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.autopenaltypoints; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.autopenaltypoints IS 'Số điểm trừ khi vi phạm lỗi không nhập điểm';
 
 
 --
--- Name: COLUMN settings.autopenaltycriteria; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.autopenaltycriteria; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.autopenaltycriteria IS 'Tên tiêu chí hiển thị khi xử phạt';
 
 
 --
--- Name: COLUMN settings.autopenaltyenabled; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.autopenaltyenabled; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.autopenaltyenabled IS 'Trạng thái bật/tắt chức năng xử phạt tự động';
 
 
 --
--- Name: COLUMN settings.autopenaltyreporter; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.autopenaltyreporter; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.autopenaltyreporter IS 'Tên người chấm hiển thị trong bảng điểm';
 
 
 --
--- Name: COLUMN settings.diem_tot; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.diem_tot; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.diem_tot IS 'Điểm cấu hình mặc định cho giờ Tốt (áp dụng khi khởi tạo tuần mới)';
 
 
 --
--- Name: COLUMN settings.diem_kha; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.diem_kha; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.diem_kha IS 'Điểm cấu hình mặc định cho giờ Khá (áp dụng khi khởi tạo tuần mới)';
 
 
 --
--- Name: COLUMN settings.diem_tb; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.diem_tb; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.diem_tb IS 'Điểm cấu hình mặc định cho giờ Trung bình (áp dụng khi khởi tạo tuần mới)';
 
 
 --
--- Name: COLUMN settings.diem_yeu; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.diem_yeu; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.diem_yeu IS 'Điểm cấu hình mặc định cho giờ Yếu (áp dụng khi khởi tạo tuần mới)';
 
 
 --
--- Name: COLUMN settings.ti_trong_diem_tuan; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.ti_trong_diem_tuan; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.ti_trong_diem_tuan IS 'Tỉ trọng % đóng góp của điểm tuần (trừ vi phạm) vào tổng điểm thi đua chung';
 
 
 --
--- Name: COLUMN settings.ti_trong_diem_hoc_tap; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.ti_trong_diem_hoc_tap; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.ti_trong_diem_hoc_tap IS 'Tỉ trọng % đóng góp của điểm trung bình giờ học tập vào tổng điểm thi đua chung';
 
 
 --
--- Name: COLUMN settings.co_che_nhap_gio_hoc; Type: COMMENT; Schema: public; Owner: postgres
+-- Name: COLUMN settings.co_che_nhap_gio_hoc; Type: COMMENT; Schema: public; Owner: -
 --
 
 COMMENT ON COLUMN public.settings.co_che_nhap_gio_hoc IS 'Cơ chế nhập điểm giờ học: tiet (tính theo số tiết) hoặc tructiep (nhập trực tiếp điểm TB)';
 
 
 --
--- Name: taikhoan; Type: TABLE; Schema: public; Owner: postgres
+-- Name: taikhoan; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.taikhoan (
@@ -3688,10 +3810,8 @@ CREATE TABLE public.taikhoan (
 );
 
 
-ALTER TABLE public.taikhoan OWNER TO postgres;
-
 --
--- Name: theodoi360; Type: TABLE; Schema: public; Owner: postgres
+-- Name: theodoi360; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.theodoi360 (
@@ -3716,10 +3836,8 @@ CREATE TABLE public.theodoi360 (
 );
 
 
-ALTER TABLE public.theodoi360 OWNER TO postgres;
-
 --
--- Name: thongbao_hethong; Type: TABLE; Schema: public; Owner: postgres
+-- Name: thongbao_hethong; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.thongbao_hethong (
@@ -3735,10 +3853,8 @@ CREATE TABLE public.thongbao_hethong (
 );
 
 
-ALTER TABLE public.thongbao_hethong OWNER TO postgres;
-
 --
--- Name: thongbao_riengbiet; Type: TABLE; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.thongbao_riengbiet (
@@ -3760,10 +3876,8 @@ CREATE TABLE public.thongbao_riengbiet (
 );
 
 
-ALTER TABLE public.thongbao_riengbiet OWNER TO postgres;
-
 --
--- Name: tieuchitd; Type: TABLE; Schema: public; Owner: postgres
+-- Name: tieuchitd; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.tieuchitd (
@@ -3783,10 +3897,8 @@ CREATE TABLE public.tieuchitd (
 );
 
 
-ALTER TABLE public.tieuchitd OWNER TO postgres;
-
 --
--- Name: tuanhoc; Type: TABLE; Schema: public; Owner: postgres
+-- Name: tuanhoc; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.tuanhoc (
@@ -3804,10 +3916,8 @@ CREATE TABLE public.tuanhoc (
 );
 
 
-ALTER TABLE public.tuanhoc OWNER TO postgres;
-
 --
--- Name: vanban_doan; Type: TABLE; Schema: public; Owner: postgres
+-- Name: vanban_doan; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.vanban_doan (
@@ -3820,10 +3930,8 @@ CREATE TABLE public.vanban_doan (
 );
 
 
-ALTER TABLE public.vanban_doan OWNER TO postgres;
-
 --
--- Name: xet_thidua; Type: TABLE; Schema: public; Owner: postgres
+-- Name: xet_thidua; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.xet_thidua (
@@ -3852,10 +3960,23 @@ CREATE TABLE public.xet_thidua (
 );
 
 
-ALTER TABLE public.xet_thidua OWNER TO postgres;
+--
+-- Name: record_version id; Type: DEFAULT; Schema: audit; Owner: -
+--
+
+ALTER TABLE ONLY audit.record_version ALTER COLUMN id SET DEFAULT nextval('audit.record_version_id_seq'::regclass);
+
 
 --
--- Name: activity_logs activity_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: record_version record_version_pkey; Type: CONSTRAINT; Schema: audit; Owner: -
+--
+
+ALTER TABLE ONLY audit.record_version
+    ADD CONSTRAINT record_version_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: activity_logs activity_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.activity_logs
@@ -3863,7 +3984,7 @@ ALTER TABLE ONLY public.activity_logs
 
 
 --
--- Name: cauhinh_tieuchi_xet_thidua cauhinh_tieuchi_xet_thidua_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua cauhinh_tieuchi_xet_thidua_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
@@ -3871,7 +3992,7 @@ ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
 
 
 --
--- Name: chamdiem chamdiem_pkey2; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: chamdiem chamdiem_pkey2; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chamdiem
@@ -3879,7 +4000,7 @@ ALTER TABLE ONLY public.chamdiem
 
 
 --
--- Name: doanvien doanvien_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: doanvien doanvien_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.doanvien
@@ -3887,7 +4008,7 @@ ALTER TABLE ONLY public.doanvien
 
 
 --
--- Name: dotptdoanvien dotptdoanvien_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: dotptdoanvien dotptdoanvien_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.dotptdoanvien
@@ -3895,7 +4016,7 @@ ALTER TABLE ONLY public.dotptdoanvien
 
 
 --
--- Name: duytricsdl duytricsdl_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: duytricsdl duytricsdl_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.duytricsdl
@@ -3903,7 +4024,7 @@ ALTER TABLE ONLY public.duytricsdl
 
 
 --
--- Name: gio_hoc_tap gio_hoc_tap_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap gio_hoc_tap_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.gio_hoc_tap
@@ -3911,7 +4032,7 @@ ALTER TABLE ONLY public.gio_hoc_tap
 
 
 --
--- Name: github_settings github_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: github_settings github_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.github_settings
@@ -3919,7 +4040,7 @@ ALTER TABLE ONLY public.github_settings
 
 
 --
--- Name: homthugopy homthugopy_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: homthugopy homthugopy_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.homthugopy
@@ -3927,7 +4048,7 @@ ALTER TABLE ONLY public.homthugopy
 
 
 --
--- Name: namhoc namhoc_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: namhoc namhoc_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.namhoc
@@ -3935,7 +4056,7 @@ ALTER TABLE ONLY public.namhoc
 
 
 --
--- Name: phancong phancong_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: phancong phancong_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.phancong
@@ -3943,7 +4064,7 @@ ALTER TABLE ONLY public.phancong
 
 
 --
--- Name: phanquyen phanquyen_doi_tuong_tab_namhoc_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: phanquyen phanquyen_doi_tuong_tab_namhoc_unique; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.phanquyen
@@ -3951,7 +4072,7 @@ ALTER TABLE ONLY public.phanquyen
 
 
 --
--- Name: phanquyen phanquyen_doituong_tab_namhoc_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: phanquyen phanquyen_doituong_tab_namhoc_unique; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.phanquyen
@@ -3959,7 +4080,7 @@ ALTER TABLE ONLY public.phanquyen
 
 
 --
--- Name: phanquyen phanquyen_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: phanquyen phanquyen_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.phanquyen
@@ -3967,7 +4088,7 @@ ALTER TABLE ONLY public.phanquyen
 
 
 --
--- Name: ptdoanvien ptdoanvien_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ptdoanvien ptdoanvien_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ptdoanvien
@@ -3975,7 +4096,7 @@ ALTER TABLE ONLY public.ptdoanvien
 
 
 --
--- Name: push_subscriptions push_subscriptions_endpoint_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: push_subscriptions push_subscriptions_endpoint_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.push_subscriptions
@@ -3983,7 +4104,7 @@ ALTER TABLE ONLY public.push_subscriptions
 
 
 --
--- Name: push_subscriptions push_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: push_subscriptions push_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.push_subscriptions
@@ -3991,7 +4112,7 @@ ALTER TABLE ONLY public.push_subscriptions
 
 
 --
--- Name: ql_baocao ql_baocao_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ql_baocao ql_baocao_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ql_baocao
@@ -3999,7 +4120,7 @@ ALTER TABLE ONLY public.ql_baocao
 
 
 --
--- Name: ql_nop_bc ql_nop_bc_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ql_nop_bc ql_nop_bc_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ql_nop_bc
@@ -4007,7 +4128,7 @@ ALTER TABLE ONLY public.ql_nop_bc
 
 
 --
--- Name: qlchidoan qlchidoan_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: qlchidoan qlchidoan_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.qlchidoan
@@ -4015,7 +4136,7 @@ ALTER TABLE ONLY public.qlchidoan
 
 
 --
--- Name: qlchidoan qlchidoan_ten_nam_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: qlchidoan qlchidoan_ten_nam_unique; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.qlchidoan
@@ -4023,7 +4144,7 @@ ALTER TABLE ONLY public.qlchidoan
 
 
 --
--- Name: settings settings_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: settings settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.settings
@@ -4031,7 +4152,7 @@ ALTER TABLE ONLY public.settings
 
 
 --
--- Name: taikhoan taikhoan_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: taikhoan taikhoan_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.taikhoan
@@ -4039,7 +4160,7 @@ ALTER TABLE ONLY public.taikhoan
 
 
 --
--- Name: theodoi360 theodoi360_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: theodoi360 theodoi360_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.theodoi360
@@ -4047,7 +4168,7 @@ ALTER TABLE ONLY public.theodoi360
 
 
 --
--- Name: thongbao_hethong thongbao_hethong_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: thongbao_hethong thongbao_hethong_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.thongbao_hethong
@@ -4055,7 +4176,7 @@ ALTER TABLE ONLY public.thongbao_hethong
 
 
 --
--- Name: thongbao_riengbiet thongbao_riengbiet_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet thongbao_riengbiet_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.thongbao_riengbiet
@@ -4063,7 +4184,7 @@ ALTER TABLE ONLY public.thongbao_riengbiet
 
 
 --
--- Name: tieuchitd tieuchitd_matieuchi_namhoc_hocky_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: tieuchitd tieuchitd_matieuchi_namhoc_hocky_unique; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.tieuchitd
@@ -4071,7 +4192,7 @@ ALTER TABLE ONLY public.tieuchitd
 
 
 --
--- Name: tieuchitd tieuchitd_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: tieuchitd tieuchitd_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.tieuchitd
@@ -4079,7 +4200,7 @@ ALTER TABLE ONLY public.tieuchitd
 
 
 --
--- Name: tuanhoc tuanhoc_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: tuanhoc tuanhoc_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.tuanhoc
@@ -4087,7 +4208,7 @@ ALTER TABLE ONLY public.tuanhoc
 
 
 --
--- Name: cauhinh_tieuchi_xet_thidua unique_cauhinh_namhoc_hocky; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua unique_cauhinh_namhoc_hocky; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
@@ -4095,7 +4216,7 @@ ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
 
 
 --
--- Name: chamdiem unique_chamdiem_record; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: chamdiem unique_chamdiem_record; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chamdiem
@@ -4103,7 +4224,7 @@ ALTER TABLE ONLY public.chamdiem
 
 
 --
--- Name: gio_hoc_tap unique_chidoan_tuan_namhoc; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap unique_chidoan_tuan_namhoc; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.gio_hoc_tap
@@ -4111,7 +4232,7 @@ ALTER TABLE ONLY public.gio_hoc_tap
 
 
 --
--- Name: qlchidoan unique_namhoc_tenchidoan; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: qlchidoan unique_namhoc_tenchidoan; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.qlchidoan
@@ -4119,7 +4240,7 @@ ALTER TABLE ONLY public.qlchidoan
 
 
 --
--- Name: xet_thidua unique_xet_thidua_chidoan_hocky; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: xet_thidua unique_xet_thidua_chidoan_hocky; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.xet_thidua
@@ -4127,7 +4248,7 @@ ALTER TABLE ONLY public.xet_thidua
 
 
 --
--- Name: vanban_doan vanban_doan_category_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: vanban_doan vanban_doan_category_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.vanban_doan
@@ -4135,7 +4256,7 @@ ALTER TABLE ONLY public.vanban_doan
 
 
 --
--- Name: vanban_doan vanban_doan_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: vanban_doan vanban_doan_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.vanban_doan
@@ -4143,7 +4264,7 @@ ALTER TABLE ONLY public.vanban_doan
 
 
 --
--- Name: xet_thidua xet_thidua_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: xet_thidua xet_thidua_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.xet_thidua
@@ -4151,553 +4272,581 @@ ALTER TABLE ONLY public.xet_thidua
 
 
 --
--- Name: idx_activity_logs_created_at; Type: INDEX; Schema: public; Owner: postgres
+-- Name: record_version_old_record_id; Type: INDEX; Schema: audit; Owner: -
+--
+
+CREATE INDEX record_version_old_record_id ON audit.record_version USING btree (old_record_id) WHERE (old_record_id IS NOT NULL);
+
+
+--
+-- Name: record_version_record_id; Type: INDEX; Schema: audit; Owner: -
+--
+
+CREATE INDEX record_version_record_id ON audit.record_version USING btree (record_id) WHERE (record_id IS NOT NULL);
+
+
+--
+-- Name: record_version_table_oid; Type: INDEX; Schema: audit; Owner: -
+--
+
+CREATE INDEX record_version_table_oid ON audit.record_version USING btree (table_oid);
+
+
+--
+-- Name: record_version_ts; Type: INDEX; Schema: audit; Owner: -
+--
+
+CREATE INDEX record_version_ts ON audit.record_version USING brin (ts);
+
+
+--
+-- Name: idx_activity_logs_created_at; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_activity_logs_created_at ON public.activity_logs USING btree (created_at DESC);
 
 
 --
--- Name: idx_activity_logs_user_id; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_activity_logs_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_activity_logs_user_id ON public.activity_logs USING btree (user_id);
 
 
 --
--- Name: idx_cauhinh_thidua_namhoc_hocky; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_cauhinh_thidua_namhoc_hocky; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_cauhinh_thidua_namhoc_hocky ON public.cauhinh_tieuchi_xet_thidua USING btree (namhoc_id, hoc_ky);
 
 
 --
--- Name: idx_chamdiem_chamlop; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_chamlop; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_chamlop ON public.chamdiem USING btree (chamlop);
 
 
 --
--- Name: idx_chamdiem_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_chidoan_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_chidoan_id ON public.chamdiem USING btree (chidoan_id);
 
 
 --
--- Name: idx_chamdiem_doanvienid; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_doanvienid; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_doanvienid ON public.chamdiem USING btree (doanvienid);
 
 
 --
--- Name: idx_chamdiem_hocky; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_hocky; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_hocky ON public.chamdiem USING btree (hocky);
 
 
 --
--- Name: idx_chamdiem_loaitieuchi; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_loaitieuchi; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_loaitieuchi ON public.chamdiem USING btree (loaitieuchi);
 
 
 --
--- Name: idx_chamdiem_lopcham_chamlop; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_lopcham_chamlop; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_lopcham_chamlop ON public.chamdiem USING btree (lopcham, chamlop);
 
 
 --
--- Name: idx_chamdiem_optimization_chamlop; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_optimization_chamlop; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_optimization_chamlop ON public.chamdiem USING btree (chamlop);
 
 
 --
--- Name: idx_chamdiem_optimization_chidoan_id; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_optimization_chidoan_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_optimization_chidoan_id ON public.chamdiem USING btree (chidoan_id);
 
 
 --
--- Name: idx_chamdiem_optimization_namhoc_hocky_tuan; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_optimization_namhoc_hocky_tuan; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_optimization_namhoc_hocky_tuan ON public.chamdiem USING btree (namhoc, hocky, tuan);
 
 
 --
--- Name: idx_chamdiem_optimization_namhoc_tuan; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_optimization_namhoc_tuan; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_optimization_namhoc_tuan ON public.chamdiem USING btree (namhoc, tuan);
 
 
 --
--- Name: idx_chamdiem_thongke; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_chamdiem_thongke; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_chamdiem_thongke ON public.chamdiem USING btree (namhoc, hocky, tuan, chamlop);
 
 
 --
--- Name: idx_doanvien_chidoan_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_doanvien_chidoan_namhoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_doanvien_chidoan_namhoc ON public.doanvien USING btree (chidoan_id, namhoc);
 
 
 --
--- Name: idx_doanvien_hoten; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_doanvien_hoten; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_doanvien_hoten ON public.doanvien USING btree (hoten);
 
 
 --
--- Name: idx_doanvien_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_doanvien_namhoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_doanvien_namhoc ON public.doanvien USING btree (namhoc);
 
 
 --
--- Name: idx_dotptdoanvien_nam_hk; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_dotptdoanvien_nam_hk; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_dotptdoanvien_nam_hk ON public.dotptdoanvien USING btree (namhoc, hocky);
 
 
 --
--- Name: idx_homthugopy_che_do; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_homthugopy_che_do; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_homthugopy_che_do ON public.homthugopy USING btree (che_do_danh_tinh);
 
 
 --
--- Name: idx_homthugopy_chu_de; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_homthugopy_chu_de; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_homthugopy_chu_de ON public.homthugopy USING btree (chu_de);
 
 
 --
--- Name: idx_homthugopy_hocky; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_homthugopy_hocky; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_homthugopy_hocky ON public.homthugopy USING btree (hocky);
 
 
 --
--- Name: idx_homthugopy_nam_hoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_homthugopy_nam_hoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_homthugopy_nam_hoc ON public.homthugopy USING btree (nam_hoc_id);
 
 
 --
--- Name: idx_homthugopy_nguoi_gui; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_homthugopy_nguoi_gui; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_homthugopy_nguoi_gui ON public.homthugopy USING btree (nguoi_gui_id);
 
 
 --
--- Name: idx_homthugopy_nguoi_nhan; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_homthugopy_nguoi_nhan; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_homthugopy_nguoi_nhan ON public.homthugopy USING btree (nguoi_nhan_gop_y);
 
 
 --
--- Name: idx_homthugopy_thoi_gian; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_homthugopy_thoi_gian; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_homthugopy_thoi_gian ON public.homthugopy USING btree (thoi_gian_gop_y DESC);
 
 
 --
--- Name: idx_homthugopy_trang_thai; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_homthugopy_trang_thai; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_homthugopy_trang_thai ON public.homthugopy USING btree (trang_thai);
 
 
 --
--- Name: idx_namhoc_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_namhoc_isdefault_true; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX idx_namhoc_isdefault_true ON public.namhoc USING btree (isdefault) WHERE (isdefault = true);
 
 
 --
--- Name: idx_phancong_chamlop; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_phancong_chamlop; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_phancong_chamlop ON public.phancong USING btree (chamlop);
 
 
 --
--- Name: idx_phancong_context; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_phancong_context; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_phancong_context ON public.phancong USING btree (namhoc, hocky, tuan);
 
 
 --
--- Name: idx_phancong_lopcham; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_phancong_lopcham; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_phancong_lopcham ON public.phancong USING btree (lopcham);
 
 
 --
--- Name: idx_phanquyen_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_phanquyen_namhoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_phanquyen_namhoc ON public.phanquyen USING btree (nam_hoc);
 
 
 --
--- Name: idx_ptdoanvien_doanvien; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_ptdoanvien_doanvien; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ptdoanvien_doanvien ON public.ptdoanvien USING btree (doanvien_id);
 
 
 --
--- Name: idx_ptdoanvien_doanvien_id; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_ptdoanvien_doanvien_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ptdoanvien_doanvien_id ON public.ptdoanvien USING btree (doanvien_id);
 
 
 --
--- Name: idx_ptdoanvien_dot; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_ptdoanvien_dot; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ptdoanvien_dot ON public.ptdoanvien USING btree (dotdangki);
 
 
 --
--- Name: idx_ptdoanvien_dotdangki; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_ptdoanvien_dotdangki; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ptdoanvien_dotdangki ON public.ptdoanvien USING btree (dotdangki);
 
 
 --
--- Name: idx_ptdoanvien_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_ptdoanvien_namhoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ptdoanvien_namhoc ON public.ptdoanvien USING btree (namhoc);
 
 
 --
--- Name: idx_ql_nop_bc_baocao; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_ql_nop_bc_baocao; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ql_nop_bc_baocao ON public.ql_nop_bc USING btree (ql_bao_cao_id);
 
 
 --
--- Name: idx_ql_nop_bc_chidoan; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_ql_nop_bc_chidoan; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ql_nop_bc_chidoan ON public.ql_nop_bc USING btree (chi_doan_id);
 
 
 --
--- Name: idx_ql_nop_bc_doanvien; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_ql_nop_bc_doanvien; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ql_nop_bc_doanvien ON public.ql_nop_bc USING btree (doanvien_id);
 
 
 --
--- Name: idx_qlchidoan_optimization_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_qlchidoan_optimization_namhoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_qlchidoan_optimization_namhoc ON public.qlchidoan USING btree (namhoc);
 
 
 --
--- Name: idx_settings_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_settings_namhoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_settings_namhoc ON public.settings USING btree (namhoc);
 
 
 --
--- Name: idx_taikhoan_doanvien_id; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_taikhoan_doanvien_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_taikhoan_doanvien_id ON public.taikhoan USING btree (doanvien_id);
 
 
 --
--- Name: idx_taikhoan_role; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_taikhoan_role; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_taikhoan_role ON public.taikhoan USING btree (role);
 
 
 --
--- Name: idx_taikhoan_uid; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_taikhoan_uid; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_taikhoan_uid ON public.taikhoan USING btree (uid);
 
 
 --
--- Name: idx_taikhoan_username_lower; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_taikhoan_username_lower; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_taikhoan_username_lower ON public.taikhoan USING btree (lower(username));
 
 
 --
--- Name: idx_theodoi360_doanvien; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_theodoi360_doanvien; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_theodoi360_doanvien ON public.theodoi360 USING btree (doan_vien_vi_pham_id);
 
 
 --
--- Name: idx_theodoi360_namhoc_tuan; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_theodoi360_namhoc_tuan; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_theodoi360_namhoc_tuan ON public.theodoi360 USING btree (nam_hoc_id, tuan_id);
 
 
 --
--- Name: idx_thongbao_riengbiet_dates; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_thongbao_riengbiet_dates; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_thongbao_riengbiet_dates ON public.thongbao_riengbiet USING btree (start_at, end_at);
 
 
 --
--- Name: idx_thongbao_riengbiet_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_thongbao_riengbiet_namhoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_thongbao_riengbiet_namhoc ON public.thongbao_riengbiet USING btree (namhoc_id);
 
 
 --
--- Name: idx_thongbao_riengbiet_sender; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_thongbao_riengbiet_sender; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_thongbao_riengbiet_sender ON public.thongbao_riengbiet USING btree (sender_id);
 
 
 --
--- Name: idx_tieuchitd_context; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_tieuchitd_context; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_tieuchitd_context ON public.tieuchitd USING btree (namhoc, hocky);
 
 
 --
--- Name: idx_tuan_isdefault_true; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_tuan_isdefault_true; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX idx_tuan_isdefault_true ON public.tuanhoc USING btree (isdefault) WHERE (isdefault = true);
 
 
 --
--- Name: idx_tuanhoc_context; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_tuanhoc_context; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_tuanhoc_context ON public.tuanhoc USING btree (namhoc, hocky, tuan);
 
 
 --
--- Name: idx_tuanhoc_optimization_namhoc_hocky; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_tuanhoc_optimization_namhoc_hocky; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_tuanhoc_optimization_namhoc_hocky ON public.tuanhoc USING btree (namhoc, hocky);
 
 
 --
--- Name: idx_unique_default_namhoc; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_unique_default_namhoc; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX idx_unique_default_namhoc ON public.namhoc USING btree (isdefault) WHERE (isdefault = true);
 
 
 --
--- Name: idx_xet_thidua_chidoan; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_xet_thidua_chidoan; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_xet_thidua_chidoan ON public.xet_thidua USING btree (chidoan_id);
 
 
 --
--- Name: idx_xet_thidua_namhoc_hocky; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_xet_thidua_namhoc_hocky; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_xet_thidua_namhoc_hocky ON public.xet_thidua USING btree (namhoc_id, hoc_ky);
 
 
 --
--- Name: ngay_3_5_idx_ptdoanvien_doanvien_id; Type: INDEX; Schema: public; Owner: postgres
+-- Name: ngay_3_5_idx_ptdoanvien_doanvien_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX ngay_3_5_idx_ptdoanvien_doanvien_id ON public.ptdoanvien USING btree (doanvien_id);
 
 
 --
--- Name: ngay_3_5_idx_ptdoanvien_dotdangki; Type: INDEX; Schema: public; Owner: postgres
+-- Name: ngay_3_5_idx_ptdoanvien_dotdangki; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX ngay_3_5_idx_ptdoanvien_dotdangki ON public.ptdoanvien USING btree (dotdangki);
 
 
 --
--- Name: chamdiem audit_i_u_d; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: chamdiem audit_i_u_d; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER audit_i_u_d AFTER INSERT OR DELETE OR UPDATE ON public.chamdiem FOR EACH ROW EXECUTE FUNCTION audit.insert_update_delete_trigger();
 
 
 --
--- Name: taikhoan trg_1_kiem_tra_an_ninh_taikhoan; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: taikhoan trg_1_kiem_tra_an_ninh_taikhoan; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER trg_1_kiem_tra_an_ninh_taikhoan BEFORE INSERT OR DELETE OR UPDATE ON public.taikhoan FOR EACH ROW EXECUTE FUNCTION public.fn_kiem_tra_an_ninh_taikhoan();
 
 
 --
--- Name: taikhoan trg_2_tu_dong_bam_mat_khau_taikhoan; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: taikhoan trg_2_tu_dong_bam_mat_khau_taikhoan; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER trg_2_tu_dong_bam_mat_khau_taikhoan BEFORE INSERT OR UPDATE OF password ON public.taikhoan FOR EACH ROW EXECUTE FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan();
 
 
 --
--- Name: taikhoan trg_3_dong_bo_taikhoan_sang_auth_users; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: taikhoan trg_3_dong_bo_taikhoan_sang_auth_users; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER trg_3_dong_bo_taikhoan_sang_auth_users AFTER INSERT OR DELETE OR UPDATE ON public.taikhoan FOR EACH ROW EXECUTE FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users();
 
 
 --
--- Name: qlchidoan trigger_chi_doan_deletion; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: qlchidoan trigger_chi_doan_deletion; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER trigger_chi_doan_deletion AFTER DELETE ON public.qlchidoan FOR EACH ROW EXECUTE FUNCTION public.handle_chi_doan_deletion();
 
 
 --
--- Name: chamdiem update_chamdiem_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: chamdiem update_chamdiem_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_chamdiem_modtime BEFORE UPDATE ON public.chamdiem FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: doanvien update_doanvien_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: doanvien update_doanvien_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_doanvien_modtime BEFORE UPDATE ON public.doanvien FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: dotptdoanvien update_dotptdoanvien_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: dotptdoanvien update_dotptdoanvien_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_dotptdoanvien_modtime BEFORE UPDATE ON public.dotptdoanvien FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: duytricsdl update_duytricsdl_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: duytricsdl update_duytricsdl_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_duytricsdl_modtime BEFORE UPDATE ON public.duytricsdl FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: github_settings update_github_settings_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: github_settings update_github_settings_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_github_settings_modtime BEFORE UPDATE ON public.github_settings FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: namhoc update_namhoc_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: namhoc update_namhoc_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_namhoc_modtime BEFORE UPDATE ON public.namhoc FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: phancong update_phancong_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: phancong update_phancong_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_phancong_modtime BEFORE UPDATE ON public.phancong FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: phanquyen update_phanquyen_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: phanquyen update_phanquyen_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_phanquyen_modtime BEFORE UPDATE ON public.phanquyen FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: ptdoanvien update_ptdoanvien_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: ptdoanvien update_ptdoanvien_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_ptdoanvien_modtime BEFORE UPDATE ON public.ptdoanvien FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: qlchidoan update_qlchidoan_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: qlchidoan update_qlchidoan_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_qlchidoan_modtime BEFORE UPDATE ON public.qlchidoan FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: settings update_settings_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: settings update_settings_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_settings_modtime BEFORE UPDATE ON public.settings FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: taikhoan update_taikhoan_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: taikhoan update_taikhoan_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_taikhoan_modtime BEFORE UPDATE ON public.taikhoan FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: tieuchitd update_tieuchitd_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: tieuchitd update_tieuchitd_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_tieuchitd_modtime BEFORE UPDATE ON public.tieuchitd FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: tuanhoc update_tuanhoc_modtime; Type: TRIGGER; Schema: public; Owner: postgres
+-- Name: tuanhoc update_tuanhoc_modtime; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER update_tuanhoc_modtime BEFORE UPDATE ON public.tuanhoc FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
 
 
 --
--- Name: ptdoanvien Ngay_3_5_ptdoanvien_doanvien_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ptdoanvien Ngay_3_5_ptdoanvien_doanvien_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ptdoanvien
@@ -4705,7 +4854,7 @@ ALTER TABLE ONLY public.ptdoanvien
 
 
 --
--- Name: ptdoanvien Ngay_3_5_ptdoanvien_dotdangki_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ptdoanvien Ngay_3_5_ptdoanvien_dotdangki_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ptdoanvien
@@ -4713,7 +4862,7 @@ ALTER TABLE ONLY public.ptdoanvien
 
 
 --
--- Name: activity_logs activity_logs_namhoc_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: activity_logs activity_logs_namhoc_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.activity_logs
@@ -4721,7 +4870,7 @@ ALTER TABLE ONLY public.activity_logs
 
 
 --
--- Name: cauhinh_tieuchi_xet_thidua cauhinh_tieuchi_xet_thidua_namhoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua cauhinh_tieuchi_xet_thidua_namhoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
@@ -4729,7 +4878,7 @@ ALTER TABLE ONLY public.cauhinh_tieuchi_xet_thidua
 
 
 --
--- Name: chamdiem chamdiem_chamlop_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: chamdiem chamdiem_chamlop_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chamdiem
@@ -4737,7 +4886,7 @@ ALTER TABLE ONLY public.chamdiem
 
 
 --
--- Name: chamdiem chamdiem_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: chamdiem chamdiem_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chamdiem
@@ -4745,7 +4894,7 @@ ALTER TABLE ONLY public.chamdiem
 
 
 --
--- Name: chamdiem chamdiem_doanvienid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: chamdiem chamdiem_doanvienid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chamdiem
@@ -4753,7 +4902,7 @@ ALTER TABLE ONLY public.chamdiem
 
 
 --
--- Name: chamdiem chamdiem_lopcham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: chamdiem chamdiem_lopcham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chamdiem
@@ -4761,7 +4910,7 @@ ALTER TABLE ONLY public.chamdiem
 
 
 --
--- Name: doanvien doanvien_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: doanvien doanvien_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.doanvien
@@ -4769,7 +4918,7 @@ ALTER TABLE ONLY public.doanvien
 
 
 --
--- Name: chamdiem fk_chamdiem_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: chamdiem fk_chamdiem_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chamdiem
@@ -4777,7 +4926,7 @@ ALTER TABLE ONLY public.chamdiem
 
 
 --
--- Name: doanvien fk_doanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: doanvien fk_doanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.doanvien
@@ -4785,7 +4934,7 @@ ALTER TABLE ONLY public.doanvien
 
 
 --
--- Name: dotptdoanvien fk_dotptdoanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: dotptdoanvien fk_dotptdoanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.dotptdoanvien
@@ -4793,7 +4942,7 @@ ALTER TABLE ONLY public.dotptdoanvien
 
 
 --
--- Name: gio_hoc_tap fk_giohoctap_chidoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap fk_giohoctap_chidoan; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.gio_hoc_tap
@@ -4801,7 +4950,7 @@ ALTER TABLE ONLY public.gio_hoc_tap
 
 
 --
--- Name: gio_hoc_tap fk_giohoctap_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap fk_giohoctap_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.gio_hoc_tap
@@ -4809,7 +4958,7 @@ ALTER TABLE ONLY public.gio_hoc_tap
 
 
 --
--- Name: gio_hoc_tap fk_giohoctap_tuan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap fk_giohoctap_tuan; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.gio_hoc_tap
@@ -4817,7 +4966,7 @@ ALTER TABLE ONLY public.gio_hoc_tap
 
 
 --
--- Name: phancong fk_phancong_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: phancong fk_phancong_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.phancong
@@ -4825,7 +4974,7 @@ ALTER TABLE ONLY public.phancong
 
 
 --
--- Name: phanquyen fk_phanquyen_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: phanquyen fk_phanquyen_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.phanquyen
@@ -4833,7 +4982,7 @@ ALTER TABLE ONLY public.phanquyen
 
 
 --
--- Name: ptdoanvien fk_ptdoanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ptdoanvien fk_ptdoanvien_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ptdoanvien
@@ -4841,7 +4990,7 @@ ALTER TABLE ONLY public.ptdoanvien
 
 
 --
--- Name: ql_baocao fk_ql_baocao_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ql_baocao fk_ql_baocao_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ql_baocao
@@ -4849,7 +4998,7 @@ ALTER TABLE ONLY public.ql_baocao
 
 
 --
--- Name: ql_nop_bc fk_ql_nop_bc_baocao; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ql_nop_bc fk_ql_nop_bc_baocao; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ql_nop_bc
@@ -4857,7 +5006,7 @@ ALTER TABLE ONLY public.ql_nop_bc
 
 
 --
--- Name: ql_nop_bc fk_ql_nop_bc_chidoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ql_nop_bc fk_ql_nop_bc_chidoan; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ql_nop_bc
@@ -4865,7 +5014,7 @@ ALTER TABLE ONLY public.ql_nop_bc
 
 
 --
--- Name: ql_nop_bc fk_ql_nop_bc_doanvien; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: ql_nop_bc fk_ql_nop_bc_doanvien; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ql_nop_bc
@@ -4873,7 +5022,7 @@ ALTER TABLE ONLY public.ql_nop_bc
 
 
 --
--- Name: qlchidoan fk_qlchidoan_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: qlchidoan fk_qlchidoan_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.qlchidoan
@@ -4881,7 +5030,7 @@ ALTER TABLE ONLY public.qlchidoan
 
 
 --
--- Name: settings fk_settings_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: settings fk_settings_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.settings
@@ -4889,7 +5038,7 @@ ALTER TABLE ONLY public.settings
 
 
 --
--- Name: thongbao_riengbiet fk_thongbao_riengbiet_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet fk_thongbao_riengbiet_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.thongbao_riengbiet
@@ -4897,7 +5046,7 @@ ALTER TABLE ONLY public.thongbao_riengbiet
 
 
 --
--- Name: thongbao_riengbiet fk_thongbao_riengbiet_taikhoan; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet fk_thongbao_riengbiet_taikhoan; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.thongbao_riengbiet
@@ -4905,7 +5054,7 @@ ALTER TABLE ONLY public.thongbao_riengbiet
 
 
 --
--- Name: tieuchitd fk_tieuchitd_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: tieuchitd fk_tieuchitd_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.tieuchitd
@@ -4913,7 +5062,7 @@ ALTER TABLE ONLY public.tieuchitd
 
 
 --
--- Name: tuanhoc fk_tuanhoc_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: tuanhoc fk_tuanhoc_namhoc; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.tuanhoc
@@ -4921,7 +5070,7 @@ ALTER TABLE ONLY public.tuanhoc
 
 
 --
--- Name: homthugopy homthugopy_nam_hoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: homthugopy homthugopy_nam_hoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.homthugopy
@@ -4929,7 +5078,7 @@ ALTER TABLE ONLY public.homthugopy
 
 
 --
--- Name: phancong phancong_chamlop_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: phancong phancong_chamlop_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.phancong
@@ -4937,7 +5086,7 @@ ALTER TABLE ONLY public.phancong
 
 
 --
--- Name: phancong phancong_lopcham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: phancong phancong_lopcham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.phancong
@@ -4945,7 +5094,7 @@ ALTER TABLE ONLY public.phancong
 
 
 --
--- Name: taikhoan taikhoan_uid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: taikhoan taikhoan_uid_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.taikhoan
@@ -4953,7 +5102,7 @@ ALTER TABLE ONLY public.taikhoan
 
 
 --
--- Name: theodoi360 theodoi360_doan_vien_vi_pham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: theodoi360 theodoi360_doan_vien_vi_pham_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.theodoi360
@@ -4961,7 +5110,7 @@ ALTER TABLE ONLY public.theodoi360
 
 
 --
--- Name: theodoi360 theodoi360_nam_hoc_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: theodoi360 theodoi360_nam_hoc_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.theodoi360
@@ -4969,7 +5118,7 @@ ALTER TABLE ONLY public.theodoi360
 
 
 --
--- Name: theodoi360 theodoi360_nguoi_to_cao_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: theodoi360 theodoi360_nguoi_to_cao_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.theodoi360
@@ -4977,7 +5126,7 @@ ALTER TABLE ONLY public.theodoi360
 
 
 --
--- Name: theodoi360 theodoi360_tieu_chi_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: theodoi360 theodoi360_tieu_chi_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.theodoi360
@@ -4985,7 +5134,7 @@ ALTER TABLE ONLY public.theodoi360
 
 
 --
--- Name: theodoi360 theodoi360_tuan_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: theodoi360 theodoi360_tuan_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.theodoi360
@@ -4993,7 +5142,7 @@ ALTER TABLE ONLY public.theodoi360
 
 
 --
--- Name: xet_thidua xet_thidua_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: xet_thidua xet_thidua_chidoan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.xet_thidua
@@ -5001,7 +5150,7 @@ ALTER TABLE ONLY public.xet_thidua
 
 
 --
--- Name: xet_thidua xet_thidua_namhoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+-- Name: xet_thidua xet_thidua_namhoc_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.xet_thidua
@@ -5009,1055 +5158,590 @@ ALTER TABLE ONLY public.xet_thidua
 
 
 --
--- Name: duytricsdl ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: record_version; Type: ROW SECURITY; Schema: audit; Owner: -
+--
+
+ALTER TABLE audit.record_version ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: duytricsdl ADMIN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.duytricsdl TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: github_settings ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: github_settings ADMIN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.github_settings TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: homthugopy ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: homthugopy ADMIN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.homthugopy TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: namhoc ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: namhoc ADMIN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.namhoc TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: phanquyen ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phanquyen ADMIN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.phanquyen TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: settings ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: settings ADMIN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.settings TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: taikhoan ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: taikhoan ADMIN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.taikhoan TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: vanban_doan ADMIN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: vanban_doan ADMIN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN full quyền" ON public.vanban_doan TO authenticated USING ((public.get_auth_role() = 'ADMIN'::text)) WITH CHECK ((public.get_auth_role() = 'ADMIN'::text));
 
 
 --
--- Name: phancong ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phancong ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV full quyền" ON public.phancong TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: thongbao_hethong ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_hethong ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV full quyền" ON public.thongbao_hethong TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: tieuchitd ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tieuchitd ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV full quyền" ON public.tieuchitd TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: tuanhoc ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tuanhoc ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV full quyền" ON public.tuanhoc TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: xet_thidua ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: xet_thidua ADMIN, BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV full quyền" ON public.xet_thidua TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: ptdoanvien ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ptdoanvien ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV, BCH full quyền" ON public.ptdoanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text])));
 
 
 --
--- Name: ql_baocao ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ql_baocao ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV, BCH full quyền" ON public.ql_baocao TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: qlchidoan ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: qlchidoan ADMIN, BTV, BCH full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV, BCH full quyền" ON public.qlchidoan TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text])));
 
 
 --
--- Name: theodoi360 ADMIN, BTV, BCH, NC, DV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: theodoi360 ADMIN, BTV, BCH, NC, DV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV, BCH, NC, DV full quyền" ON public.theodoi360 TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'DV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'DV'::text])));
 
 
 --
--- Name: ql_nop_bc ADMIN, BTV, BCH, NC, GVCN, DV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ql_nop_bc ADMIN, BTV, BCH, NC, GVCN, DV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV, BCH, NC, GVCN, DV full quyền" ON public.ql_nop_bc TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text])));
 
 
 --
--- Name: thongbao_riengbiet ADMIN, BTV, BGH, GVCN full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet ADMIN, BTV, BGH, GVCN full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV, BGH, GVCN full quyền" ON public.thongbao_riengbiet TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BGH'::text, 'GVCN'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'BGH'::text, 'GVCN'::text])));
 
 
 --
--- Name: gio_hoc_tap ADMIN, BTV, NC full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap ADMIN, BTV, NC full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "ADMIN, BTV, NC full quyền" ON public.gio_hoc_tap TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'NC'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'NC'::text])));
 
 
 --
--- Name: cauhinh_tieuchi_xet_thidua Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Admin, BTV full quyền" ON public.cauhinh_tieuchi_xet_thidua TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: doanvien Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Admin, BTV full quyền" ON public.doanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: dotptdoanvien Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: dotptdoanvien Admin, BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Admin, BTV full quyền" ON public.dotptdoanvien TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text])));
 
 
 --
--- Name: chamdiem Admin, BTV, NC full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: chamdiem Admin, BTV, NC full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Admin, BTV, NC full quyền" ON public.chamdiem TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'NC'::text]))) WITH CHECK ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BTV'::text, 'NC'::text])));
 
 
 --
--- Name: doanvien BCH có quyền cập nhật; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien BCH có quyền cập nhật; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "BCH có quyền cập nhật" ON public.doanvien FOR UPDATE TO authenticated USING ((public.get_auth_role() = 'BCH'::text)) WITH CHECK ((public.get_auth_role() = 'BCH'::text));
 
 
 --
--- Name: homthugopy BGH cập nhật toàn bộ; Type: POLICY; Schema: public; Owner: postgres
+-- Name: homthugopy BGH cập nhật toàn bộ; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY "BGH cập nhật toàn bộ" ON public.homthugopy FOR UPDATE TO authenticated USING (((public.get_auth_role() = 'BGH'::text) OR (((auth.jwt() -> 'user_metadata'::text) ->> 'role'::text) = 'BGH'::text) OR (lower(COALESCE((auth.jwt() ->> 'email'::text), ''::text)) ~ '(bgh|hieutruong|giamhieu)'::text))) WITH CHECK (((public.get_auth_role() = 'BGH'::text) OR (((auth.jwt() -> 'user_metadata'::text) ->> 'role'::text) = 'BGH'::text) OR (lower(COALESCE((auth.jwt() ->> 'email'::text), ''::text)) ~ '(bgh|hieutruong|giamhieu)'::text)));
+CREATE POLICY "BGH cập nhật toàn bộ" ON public.homthugopy FOR UPDATE TO authenticated USING ((public.get_auth_role() = 'BGH'::text)) WITH CHECK ((public.get_auth_role() = 'BGH'::text));
 
 
 --
--- Name: homthugopy BGH xem toàn bộ; Type: POLICY; Schema: public; Owner: postgres
+-- Name: homthugopy BGH xem toàn bộ; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "BGH xem toàn bộ" ON public.homthugopy FOR SELECT TO authenticated USING ((public.get_auth_role() = 'BGH'::text));
 
 
 --
--- Name: homthugopy BTV full quyền; Type: POLICY; Schema: public; Owner: postgres
+-- Name: homthugopy BTV full quyền; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "BTV full quyền" ON public.homthugopy TO authenticated USING ((public.get_auth_role() = 'BTV'::text)) WITH CHECK ((public.get_auth_role() = 'BTV'::text));
 
 
 --
--- Name: duytricsdl Công cộng được cập nhật; Type: POLICY; Schema: public; Owner: postgres
+-- Name: duytricsdl Công cộng được cập nhật; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Công cộng được cập nhật" ON public.duytricsdl FOR UPDATE USING (true) WITH CHECK (true);
 
 
 --
--- Name: duytricsdl Công cộng được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: duytricsdl Công cộng được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Công cộng được xem" ON public.duytricsdl FOR SELECT USING (true);
 
 
 --
--- Name: homthugopy Học sinh gửi góp ý; Type: POLICY; Schema: public; Owner: postgres
+-- Name: homthugopy Học sinh gửi góp ý; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Học sinh gửi góp ý" ON public.homthugopy FOR INSERT TO authenticated WITH CHECK (true);
 
 
 --
--- Name: homthugopy Học sinh sửa góp ý khi chưa xử lý; Type: POLICY; Schema: public; Owner: postgres
+-- Name: homthugopy Học sinh sửa góp ý khi chưa xử lý; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Học sinh sửa góp ý khi chưa xử lý" ON public.homthugopy FOR UPDATE TO authenticated USING (((nguoi_gui_id = (auth.uid())::text) AND ((trang_thai)::text = 'tiep_nhan'::text))) WITH CHECK (((nguoi_gui_id = (auth.uid())::text) AND ((trang_thai)::text = 'tiep_nhan'::text)));
 
 
 --
--- Name: homthugopy Học sinh xem góp ý của mình và công khai; Type: POLICY; Schema: public; Owner: postgres
+-- Name: homthugopy Học sinh xem góp ý của mình và công khai; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Học sinh xem góp ý của mình và công khai" ON public.homthugopy FOR SELECT TO authenticated USING (((nguoi_gui_id = (auth.uid())::text) OR (cong_khai_cau_tra_loi = true)));
 
 
 --
--- Name: namhoc Khách vãng lai được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: namhoc Khách vãng lai được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Khách vãng lai được xem" ON public.namhoc FOR SELECT TO anon USING (true);
 
 
 --
--- Name: tuanhoc Khách vãng lai được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tuanhoc Khách vãng lai được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Khách vãng lai được xem" ON public.tuanhoc FOR SELECT TO anon USING (true);
 
 
 --
--- Name: activity_logs; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: activity_logs; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: cauhinh_tieuchi_xet_thidua; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.cauhinh_tieuchi_xet_thidua ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: chamdiem; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: chamdiem; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.chamdiem ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: doanvien; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: doanvien; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.doanvien ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: dotptdoanvien; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: dotptdoanvien; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.dotptdoanvien ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: duytricsdl; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: duytricsdl; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.duytricsdl ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: gio_hoc_tap; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.gio_hoc_tap ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: github_settings; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: github_settings; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.github_settings ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: homthugopy; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: homthugopy; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.homthugopy ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: namhoc; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: namhoc; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.namhoc ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: phancong; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: phancong; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.phancong ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: phanquyen; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: phanquyen; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.phanquyen ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: ptdoanvien; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: ptdoanvien; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.ptdoanvien ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: push_subscriptions; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: push_subscriptions; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: ql_baocao; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: ql_baocao; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.ql_baocao ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: ql_nop_bc; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: ql_nop_bc; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.ql_nop_bc ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: qlchidoan; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: qlchidoan; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.qlchidoan ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: settings; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: settings; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: taikhoan; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: taikhoan; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.taikhoan ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: theodoi360; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: theodoi360; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.theodoi360 ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: thongbao_hethong; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: thongbao_hethong; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.thongbao_hethong ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: thongbao_riengbiet; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.thongbao_riengbiet ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: tieuchitd; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: tieuchitd; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.tieuchitd ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: tuanhoc; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: tuanhoc; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.tuanhoc ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: vanban_doan; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: vanban_doan; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.vanban_doan ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: xet_thidua; Type: ROW SECURITY; Schema: public; Owner: postgres
+-- Name: xet_thidua; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.xet_thidua ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: activity_logs Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: activity_logs Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.activity_logs FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: cauhinh_tieuchi_xet_thidua Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: cauhinh_tieuchi_xet_thidua Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.cauhinh_tieuchi_xet_thidua FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: chamdiem Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: chamdiem Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.chamdiem FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: doanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: doanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.doanvien FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: dotptdoanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: dotptdoanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.dotptdoanvien FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: duytricsdl Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: duytricsdl Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.duytricsdl FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: gio_hoc_tap Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: gio_hoc_tap Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.gio_hoc_tap FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: github_settings Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: github_settings Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.github_settings FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: namhoc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: namhoc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.namhoc FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: phancong Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phancong Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.phancong FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: phanquyen Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: phanquyen Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.phanquyen FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: ptdoanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ptdoanvien Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.ptdoanvien FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: push_subscriptions Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: push_subscriptions Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.push_subscriptions FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: ql_baocao Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ql_baocao Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.ql_baocao FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: ql_nop_bc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: ql_nop_bc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.ql_nop_bc FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: qlchidoan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: qlchidoan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.qlchidoan FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: settings Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: settings Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.settings FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: taikhoan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: taikhoan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.taikhoan FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: theodoi360 Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: theodoi360 Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.theodoi360 FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: thongbao_hethong Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_hethong Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.thongbao_hethong FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: thongbao_riengbiet Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: thongbao_riengbiet Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.thongbao_riengbiet FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: tieuchitd Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tieuchitd Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.tieuchitd FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: tuanhoc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: tuanhoc Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.tuanhoc FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: vanban_doan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: vanban_doan Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.vanban_doan FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: xet_thidua Đăng nhập được xem; Type: POLICY; Schema: public; Owner: postgres
+-- Name: xet_thidua Đăng nhập được xem; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO authenticated USING ((public.get_auth_role() = ANY (ARRAY['ADMIN'::text, 'BGH'::text, 'BTV'::text, 'BCH'::text, 'NC'::text, 'GVCN'::text, 'DV'::text, 'PH'::text])));
 
 
 --
--- Name: SCHEMA public; Type: ACL; Schema: -; Owner: pg_database_owner
---
-
-
-
---
--- Name: FUNCTION calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION calculate_scores_by_year(p_namhoc_id uuid); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION check_user_mfa_status(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_dong_bo_taikhoan_sang_auth_users(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_is_mfa_enabled(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_kiem_tra_an_ninh_taikhoan(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid, p_hocky text, p_tuan text, p_force boolean); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text, p_namhoc_id uuid); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_tu_dong_bam_mat_khau_taikhoan(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_tu_dong_khoa_tuan(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_tu_dong_khoa_tuan_va_xu_phat(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_auth_chidoan_id(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_auth_doanvien_id(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_auth_role(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_chamdiem_history(p_id text, p_limit integer, p_offset integer); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_my_role(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_secure_chidoan_id(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_secure_doanvien_id(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_secure_role(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION handle_chi_doan_deletion(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION handle_post_like(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION handle_update_likes_count(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION rpc_admin_reset_user_mfa(p_user_id text, p_username text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION rpc_authenticate_user(p_username text, p_password text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_namhoc uuid, p_sdt text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION rpc_delete_auth_users_by_usernames(p_usernames text[]); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION rpc_get_user_by_username(p_username text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION save_user_backup_codes(p_encrypted_codes text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION trigger_update_login_stats(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION update_likes_count(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION update_modified_column(); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: FUNCTION verify_and_consume_backup_code(p_code text); Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE activity_logs; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE cauhinh_tieuchi_xet_thidua; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE chamdiem; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE doanvien; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE dotptdoanvien; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE duytricsdl; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE gio_hoc_tap; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE github_settings; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE homthugopy; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE namhoc; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE phancong; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE phanquyen; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: SEQUENCE phanquyen_id_seq; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE ptdoanvien; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE push_subscriptions; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE ql_baocao; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE ql_nop_bc; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE qlchidoan; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE settings; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE taikhoan; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE theodoi360; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE thongbao_hethong; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE thongbao_riengbiet; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE tieuchitd; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE tuanhoc; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE vanban_doan; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: TABLE xet_thidua; Type: ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: DEFAULT PRIVILEGES FOR SEQUENCES; Type: DEFAULT ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: DEFAULT PRIVILEGES FOR SEQUENCES; Type: DEFAULT ACL; Schema: public; Owner: supabase_admin
---
-
-
-
---
--- Name: DEFAULT PRIVILEGES FOR FUNCTIONS; Type: DEFAULT ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: DEFAULT PRIVILEGES FOR FUNCTIONS; Type: DEFAULT ACL; Schema: public; Owner: supabase_admin
---
-
-
-
---
--- Name: DEFAULT PRIVILEGES FOR TABLES; Type: DEFAULT ACL; Schema: public; Owner: postgres
---
-
-
-
---
--- Name: DEFAULT PRIVILEGES FOR TABLES; Type: DEFAULT ACL; Schema: public; Owner: supabase_admin
---
-
-
-
---
 -- PostgreSQL database dump complete
 --
 
-\unrestrict Czv1ObUcsBCSfJknx9b3moTGpOXNUPSHjWNzLtOB44ghxse5MPxbvV1cQ8qO1OX
+\unrestrict hkCLdkjhQWdbeRkGV1bg9MeX6qJoPKBkZR2bHVGAAasu8IeGa2nKUwtnxAswSAu
 
-
--- 1. Khởi tạo tài khoản quản trị
-INSERT INTO public.taikhoan (username, password, fullname, role, chidoan_id)
-VALUES (
-    'Admin', 
-    '$argon2id$v=19$m=65536,t=3,p=4$PUDXJllthdBNREj7Jd2KTw$blk3GJ2W6Jk/+OxXqPO9quBJtU9mjQqcHb6rYNmBxjM', 
-    'Quản trị', 
-    'Admin', 
-    NULL
-) ON CONFLICT (username) DO NOTHING;
-
--- 2. Khởi tạo bảng duy trì CSDL
-INSERT INTO public.duytricsdl (so) 
-VALUES (1) 
-ON CONFLICT DO NOTHING;
-
--- 3. Khởi tạo cấu hình GitHub
-INSERT INTO public.github_settings (
-    id, 
-    github_repo_path, 
-    github_branch, 
-    github_workflow_file, 
-    github_restore_workflow_file, 
-    github_token
-)
-VALUES (
-    'project_02',
-    'congty/du_an_backend',
-    'main',
-    'supabase-backup.yml',
-    'supabase-restore.yml',
-    'ghp_abc123...'
-) ON CONFLICT (id) DO NOTHING;
