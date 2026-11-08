@@ -105,7 +105,7 @@ jobs:
           set -Eeuo pipefail
           supabase --version | tee "$RUNNER_TEMP/supabase-cli-version.txt"
           supabase db dump --help > "$RUNNER_TEMP/supabase-db-dump-help.txt"
-          grep -q -- '--db-url' "$RUNNER_TEMP/supabase-db-dump-help.txt"
+          grep -q -- '--remote' "$RUNNER_TEMP/supabase-db-dump-help.txt"
           grep -q -- '--role-only' "$RUNNER_TEMP/supabase-db-dump-help.txt"
           grep -q -- '--data-only' "$RUNNER_TEMP/supabase-db-dump-help.txt"
           grep -q -- '--use-copy' "$RUNNER_TEMP/supabase-db-dump-help.txt"
@@ -989,16 +989,16 @@ jobs:
             "$REPORT_DIR/forensic_copy_hashes.tsv" "$RUNNER_TEMP/copyhash-forensic"
 
           # Chạy CLI trong thư mục cô lập để config.toml cũ của repository không ảnh hưởng hành vi CLI v3.
-          (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$BACKUP_DIR/roles.sql" --role-only --db-url "$SOURCE_DB_URL")
-          (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$BACKUP_DIR/schema.sql" --db-url "$SOURCE_DB_URL")
+          (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$BACKUP_DIR/roles.sql" --role-only --remote="$SOURCE_DB_URL")
+          (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$BACKUP_DIR/schema.sql" --remote="$SOURCE_DB_URL")
           (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$BACKUP_DIR/data.sql" --data-only --use-copy \
-            -x storage.buckets_vectors -x storage.vector_indexes --db-url "$SOURCE_DB_URL")
+            -x storage.buckets_vectors -x storage.vector_indexes --remote="$SOURCE_DB_URL")
 
           if $PSQL "$SOURCE_DB_URL" -X -Atqc "SELECT to_regnamespace('supabase_migrations') IS NOT NULL;" | grep -qx t; then
             (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$BACKUP_DIR/migration_history_schema.sql" \
-              --schema supabase_migrations --db-url "$SOURCE_DB_URL")
+              --schema supabase_migrations --remote="$SOURCE_DB_URL")
             (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$BACKUP_DIR/migration_history_data.sql" \
-              --schema supabase_migrations --data-only --use-copy --db-url "$SOURCE_DB_URL")
+              --schema supabase_migrations --data-only --use-copy --remote="$SOURCE_DB_URL")
           else
             : > "$BACKUP_DIR/migration_history_schema.sql"
             : > "$BACKUP_DIR/migration_history_data.sql"
@@ -1087,8 +1087,8 @@ jobs:
           # Dump lại đúng công cụ restore để chứng minh schema/roles restore files không bắt trúng trạng thái thoáng qua.
           CLI_DIR="$RUNNER_TEMP/supabase-cli-isolated"
           mkdir -p "$CLI_DIR"
-          (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$REPORT_DIR/schema_probe.sql" --db-url "$SOURCE_DB_URL")
-          (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$REPORT_DIR/roles_probe.sql" --role-only --db-url "$SOURCE_DB_URL")
+          (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$REPORT_DIR/schema_probe.sql" --remote="$SOURCE_DB_URL")
+          (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$REPORT_DIR/roles_probe.sql" --role-only --remote="$SOURCE_DB_URL")
           normalize_dump_sql() {
             sed -E '/^-- Dumped from database version /d; /^-- Dumped by pg_dump version /d; /^\\(un)?restrict /d' "$1"
           }
@@ -1821,7 +1821,7 @@ jobs:
             CLI_DIR="$RUNNER_TEMP/supabase-cli-isolated"
             mkdir -p "$CLI_DIR"
             (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$REPORT_DIR/target_data_verify.sql" --data-only --use-copy \
-              -x storage.buckets_vectors -x storage.vector_indexes --db-url "$TARGET_DB_URL")
+              -x storage.buckets_vectors -x storage.vector_indexes --remote="$TARGET_DB_URL")
             python3 "$WORK_DIR/copy_hashes.py" "$REPORT_DIR/target_data_verify.sql" \
               "$REPORT_DIR/target_copy_hashes.tsv" "$RUNNER_TEMP/copyhash-target"
             if diff -u "$REPORT_DIR/official_copy_hashes.tsv" "$REPORT_DIR/target_copy_hashes.tsv" \
@@ -1835,7 +1835,7 @@ jobs:
 
             if [ -s "$REPORT_DIR/migration_history_copy_hashes.tsv" ]; then
               (cd "$CLI_DIR" && supabase db dump -f "$GITHUB_WORKSPACE/$REPORT_DIR/target_migration_history_verify.sql" \
-                --schema supabase_migrations --data-only --use-copy --db-url "$TARGET_DB_URL")
+                --schema supabase_migrations --data-only --use-copy --remote="$TARGET_DB_URL")
               python3 "$WORK_DIR/copy_hashes.py" "$REPORT_DIR/target_migration_history_verify.sql" \
                 "$REPORT_DIR/target_migration_history_copy_hashes.tsv" "$RUNNER_TEMP/copyhash-target-migrations"
               if diff -u "$REPORT_DIR/migration_history_copy_hashes.tsv" "$REPORT_DIR/target_migration_history_copy_hashes.tsv" \
