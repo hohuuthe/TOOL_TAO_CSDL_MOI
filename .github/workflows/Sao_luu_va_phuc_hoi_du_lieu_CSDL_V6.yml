@@ -7,7 +7,9 @@
 #   - Tạo gói backup mã hóa để lưu an toàn và có thể phục hồi sang TARGET_DB_URL.
 #
 # Chế độ sử dụng:
-#   - BACKUP_ONLY: chỉ tạo backup dữ liệu đã mã hóa.
+#   - KIEM_TRA_LOCAL: kiểm thử sao lưu và phục hồi trên local, không tạo artifact.
+#       Mã xác nhận: KIEM_TRA_V6
+#   - BACKUP_ONLY: tạo backup dữ liệu đã mã hóa.
 #       Mã xác nhận: SAO_LUU_DATA_V6
 #   - BACKUP_AND_RESTORE: tạo backup rồi phục hồi sang TARGET.
 #       Mã xác nhận: PHUC_HOI_DATA_V6
@@ -28,15 +30,16 @@ on:
   workflow_dispatch:
     inputs:
       che_do:
-        description: "Chọn BACKUP_ONLY hoặc BACKUP_AND_RESTORE"
+        description: "Chọn KIEM_TRA_LOCAL, BACKUP_ONLY hoặc BACKUP_AND_RESTORE"
         required: true
-        default: BACKUP_ONLY
+        default: KIEM_TRA_LOCAL
         type: choice
         options:
+          - KIEM_TRA_LOCAL
           - BACKUP_ONLY
           - BACKUP_AND_RESTORE
       xac_nhan:
-        description: "BACKUP_ONLY: nhập SAO_LUU_DATA_V6 | BACKUP_AND_RESTORE: nhập PHUC_HOI_DATA_V6"
+        description: "KIEM_TRA_LOCAL: KIEM_TRA_V6 | BACKUP_ONLY: SAO_LUU_DATA_V6 | BACKUP_AND_RESTORE: PHUC_HOI_DATA_V6"
         required: true
         type: string
       save_encrypted_artifact:
@@ -77,30 +80,53 @@ jobs:
       - name: Lấy mã nguồn
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Xác nhận chế độ chạy thủ công
+      - name: Xác nhận chế độ và điều kiện chạy
         shell: bash
+        env:
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_ENCRYPTION_PASSWORD }}
         run: |
           set -Eeuo pipefail
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ "${{ inputs.save_encrypted_artifact }}" != "true" ]; then
-              echo "ERROR: Chay manual V6 bat buoc save_encrypted_artifact=true."
-              exit 1
-            fi
             case "${{ inputs.che_do }}" in
-              BACKUP_ONLY)
-                test "${{ inputs.xac_nhan }}" = "SAO_LUU_DATA_V6" || {
-                  echo "ERROR: BACKUP_ONLY phai nhap SAO_LUU_DATA_V6."
+              KIEM_TRA_LOCAL)
+                test "${{ inputs.xac_nhan }}" = "KIEM_TRA_V6" || {
+                  echo "LỖI: KIEM_TRA_LOCAL phải nhập đúng KIEM_TRA_V6."
                   exit 1
                 }
+                echo "V6 chạy chế độ KIEM_TRA_LOCAL: không tạo artifact và không cần mật khẩu mã hóa."
+                ;;
+              BACKUP_ONLY)
+                test "${{ inputs.xac_nhan }}" = "SAO_LUU_DATA_V6" || {
+                  echo "LỖI: BACKUP_ONLY phải nhập đúng SAO_LUU_DATA_V6."
+                  exit 1
+                }
+                test "${{ inputs.save_encrypted_artifact }}" = "true" || {
+                  echo "LỖI: BACKUP_ONLY bắt buộc lưu artifact đã mã hóa."
+                  exit 1
+                }
+                if [ -z "${BACKUP_PASSWORD:-}" ] || [ "${#BACKUP_PASSWORD}" -lt 20 ]; then
+                  echo "LỖI: GitHub Secret BACKUP_ENCRYPTION_PASSWORD chưa có hoặc ngắn hơn 20 ký tự."
+                  echo "Hãy cấu hình secret này trước khi chạy BACKUP_ONLY."
+                  exit 1
+                fi
                 ;;
               BACKUP_AND_RESTORE)
                 test "${{ inputs.xac_nhan }}" = "PHUC_HOI_DATA_V6" || {
-                  echo "ERROR: BACKUP_AND_RESTORE phai nhap PHUC_HOI_DATA_V6."
+                  echo "LỖI: BACKUP_AND_RESTORE phải nhập đúng PHUC_HOI_DATA_V6."
                   exit 1
                 }
+                test "${{ inputs.save_encrypted_artifact }}" = "true" || {
+                  echo "LỖI: BACKUP_AND_RESTORE bắt buộc lưu artifact đã mã hóa."
+                  exit 1
+                }
+                if [ -z "${BACKUP_PASSWORD:-}" ] || [ "${#BACKUP_PASSWORD}" -lt 20 ]; then
+                  echo "LỖI: GitHub Secret BACKUP_ENCRYPTION_PASSWORD chưa có hoặc ngắn hơn 20 ký tự."
+                  echo "Hãy cấu hình secret này trước khi chạy BACKUP_AND_RESTORE."
+                  exit 1
+                fi
                 ;;
               *)
-                echo "ERROR: che_do khong hop le."
+                echo "LỖI: Chế độ chạy không hợp lệ."
                 exit 1
                 ;;
             esac
@@ -286,9 +312,9 @@ jobs:
           tar -C "$V6_WORK" -czf "$V6_WORK/V6_full_data_package.tar.gz" \
             V6_full_data.sql V6_row_counts.tsv relations.txt
 
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.save_encrypted_artifact }}" = "true" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.che_do }}" != "KIEM_TRA_LOCAL" ] && [ "${{ inputs.save_encrypted_artifact }}" = "true" ]; then
             if [ -z "${BACKUP_PASSWORD:-}" ] || [ "${#BACKUP_PASSWORD}" -lt 20 ]; then
-              echo "ERROR: BACKUP_ENCRYPTION_PASSWORD phai co it nhat 20 ky tu de luu artifact DATA."
+              echo "LỖI: BACKUP_ENCRYPTION_PASSWORD phải có ít nhất 20 ký tự để lưu artifact dữ liệu."
               exit 1
             fi
             echo "::add-mask::$BACKUP_PASSWORD"
@@ -301,7 +327,7 @@ jobs:
             sha256sum "$V6_WORK/V6_full_data_package.tar.gz.gpg" > "$V6_WORK/V6_full_data_package.sha256"
             echo "upload_artifact=true" >> "$GITHUB_OUTPUT"
           else
-            # Push-test: kiem tra dong goi nhung khong luu data ra ngoai runner.
+            # Chế độ push-test hoặc KIEM_TRA_LOCAL: kiểm tra đóng gói nhưng không lưu dữ liệu ra ngoài runner.
             echo "upload_artifact=false" >> "$GITHUB_OUTPUT"
           fi
 
