@@ -1,0 +1,75 @@
+name: Test V4 FINAL Restore on Clean Local Supabase
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/Test_V4_FINAL_Restore_Local.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  restore_test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start clean local Supabase database
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/v4-local
+          cd /tmp/v4-local
+          supabase init
+          supabase db start
+
+      - name: Apply V4 FINAL SQL with fail-fast
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SQL_FILE="$GITHUB_WORKSPACE/supabase/migrations/20261109000000_khoi_tao_cau_truc_v4_final.sql"
+          test -s "$SQL_FILE"
+          export PGPASSWORD=postgres
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -X -v ON_ERROR_STOP=1 -f "$SQL_FILE"
+
+      - name: Verify restored inventory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export PGPASSWORD=postgres
+          DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+
+          TABLES=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname IN ('public','audit');")
+          FUNCTIONS=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN ('public','audit');")
+          TRIGGERS=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname IN ('public','audit');")
+          POLICIES=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_policy pol JOIN pg_class c ON c.oid=pol.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','audit');")
+          RLS=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND c.relrowsecurity AND n.nspname IN ('public','audit');")
+
+          echo "restored_tables=$TABLES"
+          echo "restored_functions=$FUNCTIONS"
+          echo "restored_triggers=$TRIGGERS"
+          echo "restored_policies=$POLICIES"
+          echo "restored_rls_tables=$RLS"
+
+          test "$TABLES" = "27"
+          test "$FUNCTIONS" = "45"
+          test "$TRIGGERS" = "19"
+          test "$POLICIES" = "60"
+          test "$RLS" = "27"
+
+          psql "$DB" -X -v ON_ERROR_STOP=1 -Atqc "SELECT to_regclass('audit.record_version') IS NOT NULL;"
+          psql "$DB" -X -v ON_ERROR_STOP=1 -Atqc "SELECT to_regprocedure('audit.insert_update_delete_trigger()') IS NOT NULL;"
+          psql "$DB" -X -v ON_ERROR_STOP=1 -Atqc "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pgcrypto');"
+          psql "$DB" -X -v ON_ERROR_STOP=1 -Atqc "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='uuid-ossp');"
+
+          echo "LOCAL RESTORE TEST: PASSED"
