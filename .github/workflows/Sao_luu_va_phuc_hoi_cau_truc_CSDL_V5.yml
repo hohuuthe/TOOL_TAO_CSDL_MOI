@@ -16,7 +16,7 @@
 #   - Phục hồi dùng transaction và ON_ERROR_STOP để tránh tạo dở dang.
 # =============================================================================
 
-name: V5 - Sao lưu và phục hồi cấu trúc cơ sở dữ liệu Supabase
+name: V5 - Sao lưu và phục hồi trực tiếp cấu trúc CSDL Supabase
 
 on:
   workflow_dispatch:
