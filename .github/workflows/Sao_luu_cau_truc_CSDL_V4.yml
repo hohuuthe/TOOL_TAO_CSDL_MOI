@@ -1,5 +1,6 @@
 # =============================================================================
 # V4 - SAO LƯU CẤU TRÚC CƠ SỞ DỮ LIỆU SUPABASE
+# Kiểm thử tương thích: cho phép schema audit đã tồn tại sẵn.
 #
 # Mục đích:
 #   - Chỉ sao lưu CẤU TRÚC từ cơ sở dữ liệu nguồn SOURCE_DB_URL.
