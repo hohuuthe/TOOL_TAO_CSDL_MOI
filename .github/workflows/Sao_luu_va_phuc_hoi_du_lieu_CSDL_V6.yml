@@ -7,12 +7,10 @@
 #   - Tạo gói backup mã hóa để lưu an toàn và có thể phục hồi sang TARGET_DB_URL.
 #
 # Chế độ sử dụng:
-#   - KIEM_TRA_LOCAL: kiểm thử sao lưu và phục hồi trên local, không tạo artifact.
-#       Mã xác nhận: KIEM_TRA_V6
-#   - BACKUP_ONLY: tạo backup dữ liệu đã mã hóa.
-#       Mã xác nhận: SAO_LUU_DATA_V6
+#   - KIEM_TRA_LOCAL: kiểm thử sao lưu và phục hồi trên local, không cần mã xác nhận.
+#   - BACKUP_ONLY: tạo backup dữ liệu đã mã hóa, không cần mã xác nhận.
 #   - BACKUP_AND_RESTORE: tạo backup rồi phục hồi sang TARGET.
-#       Mã xác nhận: PHUC_HOI_DATA_V6
+#       Mã xác nhận bắt buộc: PHUC_HOI_DATA_V6
 #
 # GitHub Actions Secrets:
 #   - SOURCE_DB_URL
@@ -39,8 +37,9 @@ on:
           - BACKUP_ONLY
           - BACKUP_AND_RESTORE
       xac_nhan:
-        description: "KIEM_TRA_LOCAL: KIEM_TRA_V6 | BACKUP_ONLY: SAO_LUU_DATA_V6 | BACKUP_AND_RESTORE: PHUC_HOI_DATA_V6"
-        required: true
+        description: "Chỉ cần khi BACKUP_AND_RESTORE: nhập PHUC_HOI_DATA_V6"
+        required: false
+        default: ""
         type: string
       save_encrypted_artifact:
         description: "Lưu bản sao dữ liệu đã mã hóa thành GitHub Artifact"
@@ -89,17 +88,9 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             case "${{ inputs.che_do }}" in
               KIEM_TRA_LOCAL)
-                test "${{ inputs.xac_nhan }}" = "KIEM_TRA_V6" || {
-                  echo "LỖI: KIEM_TRA_LOCAL phải nhập đúng KIEM_TRA_V6."
-                  exit 1
-                }
-                echo "V6 chạy chế độ KIEM_TRA_LOCAL: không tạo artifact và không cần mật khẩu mã hóa."
+                echo "V6 chạy chế độ KIEM_TRA_LOCAL: không cần mã xác nhận, không tạo artifact và không cần mật khẩu mã hóa."
                 ;;
               BACKUP_ONLY)
-                test "${{ inputs.xac_nhan }}" = "SAO_LUU_DATA_V6" || {
-                  echo "LỖI: BACKUP_ONLY phải nhập đúng SAO_LUU_DATA_V6."
-                  exit 1
-                }
                 test "${{ inputs.save_encrypted_artifact }}" = "true" || {
                   echo "LỖI: BACKUP_ONLY bắt buộc lưu artifact đã mã hóa."
                   exit 1
