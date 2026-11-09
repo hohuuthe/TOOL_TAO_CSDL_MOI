@@ -1,0 +1,435 @@
+name: Supabase V6 DATA-ONLY - Full Database Data Backup + Safe Restore
+
+on:
+  workflow_dispatch:
+    inputs:
+      xac_nhan:
+        description: "Nhap PHUC_HOI_DATA_V6 de cho phep restore vao TARGET_DB_URL"
+        required: true
+        type: string
+      save_encrypted_artifact:
+        description: "Luu backup DATA da ma hoa thanh GitHub Artifact"
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/Sao_luu_FULL_DATA_V6.yml'
+
+concurrency:
+  group: supabase-data-only-v6
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  V6_WORK: /tmp/v6-data
+  V6_DATA_SQL: /tmp/v6-data/V6_full_data.sql
+  V6_MANIFEST: /tmp/v6-data/V6_row_counts.tsv
+  V5_SCHEMA: supabase/backups/v5/V5_khoi_tao_cau_truc_va_phuc_hoi.sql
+
+jobs:
+  backup_and_verify:
+    name: V6 - Backup full DATA va restore-test local
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      dump_tables: ${{ steps.dump.outputs.dump_tables }}
+      dump_rows: ${{ steps.dump.outputs.dump_rows }}
+      auth_users: ${{ steps.dump.outputs.auth_users }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Xac nhan manual restore
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.xac_nhan }}" != "PHUC_HOI_DATA_V6" ]; then
+            echo "ERROR: Phai nhap dung PHUC_HOI_DATA_V6."
+            exit 1
+          fi
+
+      - name: Cai PostgreSQL client va cong cu
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release gzip
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          PGDG_FPR=$(gpg --batch --with-colons --show-keys /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            | awk -F: '$1=="fpr" {print $10; exit}')
+          test "$PGDG_FPR" = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3.2.0
+        with:
+          version: latest
+
+      - name: Kiem tra contract Supabase CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          supabase --version
+          supabase db dump --help > /tmp/v6-dump-help.txt
+          grep -q -- '--data-only' /tmp/v6-dump-help.txt
+          grep -q -- '--use-copy' /tmp/v6-dump-help.txt
+          if grep -q -- '--db-url' /tmp/v6-dump-help.txt; then
+            echo "DUMP_CONNECTION_FLAG=db-url" >> "$GITHUB_ENV"
+          elif grep -q -- '--remote' /tmp/v6-dump-help.txt; then
+            echo "DUMP_CONNECTION_FLAG=remote" >> "$GITHUB_ENV"
+          else
+            echo "ERROR: Supabase CLI khong co --db-url hoac --remote."
+            exit 1
+          fi
+
+      - name: Tao backup FULL DATA tu SOURCE
+        id: dump
+        shell: bash
+        env:
+          SOURCE_SECRET: ${{ secrets.SOURCE_DB_URL }}
+        run: |
+          set -Eeuo pipefail
+          if [ -z "${SOURCE_SECRET:-}" ]; then
+            echo "ERROR: SOURCE_DB_URL chua duoc cau hinh."
+            exit 1
+          fi
+          echo "::add-mask::$SOURCE_SECRET"
+          SOURCE_URL="${SOURCE_SECRET/:6543/:5432}"
+          echo "::add-mask::$SOURCE_URL"
+
+          mkdir -p "$V6_WORK"
+
+          if [ "$DUMP_CONNECTION_FLAG" = "db-url" ]; then
+            supabase db dump \
+              --db-url "$SOURCE_URL" \
+              -f "$V6_DATA_SQL" \
+              --data-only \
+              --use-copy \
+              -x "storage.buckets_vectors" \
+              -x "storage.vector_indexes"
+          else
+            supabase db dump \
+              --remote="$SOURCE_URL" \
+              -f "$V6_DATA_SQL" \
+              --data-only \
+              --use-copy \
+              -x "storage.buckets_vectors" \
+              -x "storage.vector_indexes"
+          fi
+
+          test -s "$V6_DATA_SQL"
+
+          # Loai lenh psql/PG17 khong portable, khong sua noi dung du lieu.
+          sed -i -E \
+            -e '/^\\(un)?restrict[[:space:]]/d' \
+            -e '/^SET transaction_timeout = 0;[[:space:]]*$/d' \
+            "$V6_DATA_SQL"
+
+          grep -Eq '^COPY .* FROM stdin;[[:space:]]*$' "$V6_DATA_SQL" || {
+            echo "ERROR: Backup V6 khong co COPY DATA."
+            exit 1
+          }
+
+          # Lay danh sach relation that su co trong dump va dem chinh xac tung bang tu SOURCE.
+          grep -E '^COPY .* FROM stdin;[[:space:]]*$' "$V6_DATA_SQL" \
+            | sed -E 's/^COPY (.*) \(.*$/\1/' \
+            | sort -u > "$V6_WORK/relations.txt"
+
+          : > "$V6_MANIFEST"
+          while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            count=$(/usr/lib/postgresql/17/bin/psql "$SOURCE_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM $rel;")
+            printf '%s\t%s\n' "$rel" "$count" >> "$V6_MANIFEST"
+          done < "$V6_WORK/relations.txt"
+
+          test -s "$V6_MANIFEST"
+          dump_tables=$(wc -l < "$V6_MANIFEST" | tr -d ' ')
+          dump_rows=$(awk -F '\t' '{s+=$2} END {printf "%.0f", s+0}' "$V6_MANIFEST")
+          auth_users=$(/usr/lib/postgresql/17/bin/psql "$SOURCE_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM auth.users;")
+
+          echo "dump_tables=$dump_tables" >> "$GITHUB_OUTPUT"
+          echo "dump_rows=$dump_rows" >> "$GITHUB_OUTPUT"
+          echo "auth_users=$auth_users" >> "$GITHUB_OUTPUT"
+
+          echo "V6_DUMP_TABLES=$dump_tables"
+          echo "V6_DUMP_ROWS=$dump_rows"
+          echo "V6_AUTH_USERS=$auth_users"
+          echo "V6 FULL DATA BACKUP: PASSED"
+
+      - name: Khoi dong Supabase local sach
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/v6-local
+          mkdir -p /tmp/v6-local
+          cd /tmp/v6-local
+          supabase init
+          supabase db start
+
+      - name: Nap schema V5 vao local truoc khi restore DATA
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s "$V5_SCHEMA"
+          export PGPASSWORD=postgres
+          LOCAL_DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X \
+            --single-transaction \
+            -v ON_ERROR_STOP=1 \
+            -f "$V5_SCHEMA"
+
+      - name: Restore-test FULL DATA tren local
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export PGPASSWORD=postgres
+          LOCAL_DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+
+          /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X \
+            --single-transaction \
+            -v ON_ERROR_STOP=1 \
+            -c "SET session_replication_role = replica;" \
+            -f "$V6_DATA_SQL"
+
+          mismatches=0
+          checked=0
+          while IFS=$'\t' read -r rel expected; do
+            [ -n "$rel" ] || continue
+            actual=$(/usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM $rel;")
+            checked=$((checked+1))
+            if [ "$actual" != "$expected" ]; then
+              echo "MISMATCH $rel source=$expected restored=$actual"
+              mismatches=$((mismatches+1))
+            fi
+          done < "$V6_MANIFEST"
+
+          echo "V6_VERIFIED_TABLES=$checked"
+          echo "V6_MISMATCHES=$mismatches"
+          test "$checked" -gt 0
+          test "$mismatches" -eq 0
+
+          local_auth=$(/usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM auth.users;")
+          test "$local_auth" = "${{ steps.dump.outputs.auth_users }}"
+
+          echo "V6 FULL DATA LOCAL RESTORE TEST: PASSED"
+
+      - name: Dong goi va ma hoa backup DATA
+        id: encrypt
+        shell: bash
+        env:
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_ENCRYPTION_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          tar -C "$V6_WORK" -czf "$V6_WORK/V6_full_data_package.tar.gz" \
+            V6_full_data.sql V6_row_counts.tsv relations.txt
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.save_encrypted_artifact }}" = "true" ]; then
+            if [ -z "${BACKUP_PASSWORD:-}" ] || [ "${#BACKUP_PASSWORD}" -lt 20 ]; then
+              echo "ERROR: BACKUP_ENCRYPTION_PASSWORD phai co it nhat 20 ky tu de luu artifact DATA."
+              exit 1
+            fi
+            echo "::add-mask::$BACKUP_PASSWORD"
+            printf '%s' "$BACKUP_PASSWORD" | gpg \
+              --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+              --symmetric --cipher-algo AES256 --s2k-digest-algo SHA512 \
+              --output "$V6_WORK/V6_full_data_package.tar.gz.gpg" \
+              "$V6_WORK/V6_full_data_package.tar.gz"
+
+            sha256sum "$V6_WORK/V6_full_data_package.tar.gz.gpg" > "$V6_WORK/V6_full_data_package.sha256"
+            echo "upload_artifact=true" >> "$GITHUB_OUTPUT"
+          else
+            # Push-test: kiem tra dong goi nhung khong luu data ra ngoai runner.
+            echo "upload_artifact=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload encrypted DATA backup artifact
+        if: steps.encrypt.outputs.upload_artifact == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: V6-FULL-DATA-ENCRYPTED
+          path: |
+            /tmp/v6-data/V6_full_data_package.tar.gz.gpg
+            /tmp/v6-data/V6_full_data_package.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Xoa du lieu tho khoi runner
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          rm -f "$V6_DATA_SQL" "$V6_MANIFEST" "$V6_WORK/relations.txt" "$V6_WORK/V6_full_data_package.tar.gz"
+          echo "V6 RAW DATA CLEANUP: DONE"
+
+  restore_target:
+    name: V6 - Restore FULL DATA vao TARGET moi
+    if: github.event_name == 'workflow_dispatch'
+    needs: backup_and_verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cai PostgreSQL client va GPG
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release gzip
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Tai encrypted DATA artifact
+        if: inputs.save_encrypted_artifact == true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: V6-FULL-DATA-ENCRYPTED
+          path: /tmp/v6-restore
+
+      - name: Chuan bi goi DATA cho restore
+        shell: bash
+        env:
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_ENCRYPTION_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/v6-restore
+
+          if [ "${{ inputs.save_encrypted_artifact }}" = "true" ]; then
+            test -s /tmp/v6-restore/V6_full_data_package.tar.gz.gpg
+            test -s /tmp/v6-restore/V6_full_data_package.sha256
+            (cd /tmp/v6-restore && sha256sum -c V6_full_data_package.sha256)
+
+            if [ -z "${BACKUP_PASSWORD:-}" ]; then
+              echo "ERROR: Thieu BACKUP_ENCRYPTION_PASSWORD."
+              exit 1
+            fi
+            echo "::add-mask::$BACKUP_PASSWORD"
+            printf '%s' "$BACKUP_PASSWORD" | gpg \
+              --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+              --decrypt \
+              --output /tmp/v6-restore/V6_full_data_package.tar.gz \
+              /tmp/v6-restore/V6_full_data_package.tar.gz.gpg
+
+            tar -C /tmp/v6-restore -xzf /tmp/v6-restore/V6_full_data_package.tar.gz
+          else
+            echo "ERROR: Restore TARGET yeu cau save_encrypted_artifact=true."
+            exit 1
+          fi
+
+          test -s /tmp/v6-restore/V6_full_data.sql
+          test -s /tmp/v6-restore/V6_row_counts.tsv
+
+      - name: Preflight TARGET
+        shell: bash
+        env:
+          SOURCE_SECRET: ${{ secrets.SOURCE_DB_URL }}
+          TARGET_SECRET: ${{ secrets.TARGET_DB_URL }}
+        run: |
+          set -Eeuo pipefail
+          if [ -z "${SOURCE_SECRET:-}" ] || [ -z "${TARGET_SECRET:-}" ]; then
+            echo "ERROR: Can SOURCE_DB_URL va TARGET_DB_URL."
+            exit 1
+          fi
+          echo "::add-mask::$SOURCE_SECRET"
+          echo "::add-mask::$TARGET_SECRET"
+
+          SOURCE_URL="${SOURCE_SECRET/:6543/:5432}"
+          TARGET_URL="${TARGET_SECRET/:6543/:5432}"
+          echo "::add-mask::$SOURCE_URL"
+          echo "::add-mask::$TARGET_URL"
+
+          identity() {
+            printf '%s' "$1" | sed -E 's#^[^:]+://([^:]+):[^@]*@([^/:?]+).*#\1@\2#'
+          }
+          SRC_ID=$(identity "$SOURCE_URL")
+          TGT_ID=$(identity "$TARGET_URL")
+          if [ -z "$SRC_ID" ] || [ -z "$TGT_ID" ] || [ "$SRC_ID" = "$TGT_ID" ]; then
+            echo "ERROR: SOURCE va TARGET giong nhau hoac khong xac dinh duoc."
+            exit 1
+          fi
+
+          SRC_MAJOR=$(/usr/lib/postgresql/17/bin/psql "$SOURCE_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT current_setting('server_version_num')::int / 10000;")
+          TGT_MAJOR=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT current_setting('server_version_num')::int / 10000;")
+          test "$SRC_MAJOR" = "$TGT_MAJOR"
+
+          # DATA-ONLY: moi relation trong backup phai ton tai tren TARGET va phai trong.
+          while IFS=$'\t' read -r rel expected; do
+            [ -n "$rel" ] || continue
+            exists=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -v rel="$rel" -c "SELECT to_regclass(:'rel') IS NOT NULL;")
+            if [ "$exists" != "t" ]; then
+              echo "ERROR: TARGET thieu relation $rel. Hay chay V5 tao cau truc truoc."
+              exit 1
+            fi
+            current=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM $rel;")
+            if [ "$current" != "0" ]; then
+              echo "ERROR: TARGET relation $rel khong trong (rows=$current). V6 khong ghi de data."
+              exit 1
+            fi
+          done < /tmp/v6-restore/V6_row_counts.tsv
+
+          echo "TARGET_URL=$TARGET_URL" >> "$GITHUB_ENV"
+          echo "V6 TARGET PREFLIGHT: PASSED"
+
+      - name: Restore FULL DATA vao TARGET trong transaction
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          /usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X \
+            --single-transaction \
+            -v ON_ERROR_STOP=1 \
+            -c "SET session_replication_role = replica;" \
+            -f /tmp/v6-restore/V6_full_data.sql
+
+          echo "V6 TARGET DATA RESTORE: COMMITTED"
+
+      - name: Verify row counts TARGET
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mismatches=0
+          checked=0
+          while IFS=$'\t' read -r rel expected; do
+            [ -n "$rel" ] || continue
+            actual=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM $rel;")
+            checked=$((checked+1))
+            if [ "$actual" != "$expected" ]; then
+              echo "MISMATCH $rel source=$expected target=$actual"
+              mismatches=$((mismatches+1))
+            fi
+          done < /tmp/v6-restore/V6_row_counts.tsv
+
+          echo "V6_TARGET_VERIFIED_TABLES=$checked"
+          echo "V6_TARGET_MISMATCHES=$mismatches"
+          test "$checked" = "${{ needs.backup_and_verify.outputs.dump_tables }}"
+          test "$mismatches" -eq 0
+
+          target_auth=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM auth.users;")
+          test "$target_auth" = "${{ needs.backup_and_verify.outputs.auth_users }}"
+
+          echo "V6 TARGET FULL DATA VERIFY: PASSED"
+
+      - name: Xoa DATA tam khoi runner
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          rm -rf /tmp/v6-restore
+          echo "V6 TARGET TEMP DATA CLEANUP: DONE"
