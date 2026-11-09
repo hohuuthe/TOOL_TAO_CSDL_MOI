@@ -1,17 +1,19 @@
 -- =========================================================================
 -- V4 FINAL - SOURCE-ONLY APPLICATION SCHEMA SNAPSHOT
 -- Bao gồm toàn bộ custom/application schemas của SOURCE_DB_URL. Không dùng TARGET_DB_URL.
--- Không chứa dữ liệu mẫu/seed.
+-- Không chứa dữ liệu mẫu/seed. Giữ ACL/GRANT/REVOKE của SOURCE.
 -- Application schemas:
 --   - public
 --   - audit
 -- =========================================================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
+
 --
 -- PostgreSQL database dump
 --
 
-\restrict dHm6Y8EvtKBT8H91XU80h6k00aMDX5RaHstomxK4az7ci8I2HGn2bj0bK9WoY1e
 
 -- Dumped from database version 17.11
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg26.04+2)
@@ -19,7 +21,6 @@
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
-SET transaction_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
 SELECT pg_catalog.set_config('search_path', '', false);
@@ -5740,8 +5741,671 @@ CREATE POLICY "Đăng nhập được xem" ON public.xet_thidua FOR SELECT TO au
 
 
 --
+-- Name: SCHEMA public; Type: ACL; Schema: -; Owner: -
+--
+
+GRANT USAGE ON SCHEMA public TO postgres;
+GRANT USAGE ON SCHEMA public TO anon;
+GRANT USAGE ON SCHEMA public TO authenticated;
+GRANT USAGE ON SCHEMA public TO service_role;
+
+
+--
+-- Name: FUNCTION calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid, p_doanvien_id uuid) TO anon;
+GRANT ALL ON FUNCTION public.calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid, p_doanvien_id uuid) TO authenticated;
+GRANT ALL ON FUNCTION public.calculate_scores_advanced(p_namhoc_id uuid, p_chidoan_id uuid, p_doanvien_id uuid) TO service_role;
+
+
+--
+-- Name: FUNCTION calculate_scores_by_year(p_namhoc_id uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.calculate_scores_by_year(p_namhoc_id uuid) TO anon;
+GRANT ALL ON FUNCTION public.calculate_scores_by_year(p_namhoc_id uuid) TO authenticated;
+GRANT ALL ON FUNCTION public.calculate_scores_by_year(p_namhoc_id uuid) TO service_role;
+
+
+--
+-- Name: FUNCTION check_user_mfa_status(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.check_user_mfa_status() TO anon;
+GRANT ALL ON FUNCTION public.check_user_mfa_status() TO authenticated;
+GRANT ALL ON FUNCTION public.check_user_mfa_status() TO service_role;
+
+
+--
+-- Name: FUNCTION fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid) TO anon;
+GRANT ALL ON FUNCTION public.fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid) TO authenticated;
+GRANT ALL ON FUNCTION public.fn_dem_du_lieu_lien_quan_tuan(p_namhoc_id uuid, p_tuan_id uuid) TO service_role;
+
+
+--
+-- Name: FUNCTION fn_dong_bo_taikhoan_sang_auth_users(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users() TO anon;
+GRANT ALL ON FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users() TO authenticated;
+GRANT ALL ON FUNCTION public.fn_dong_bo_taikhoan_sang_auth_users() TO service_role;
+
+
+--
+-- Name: FUNCTION fn_is_mfa_enabled(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_is_mfa_enabled() TO anon;
+GRANT ALL ON FUNCTION public.fn_is_mfa_enabled() TO authenticated;
+GRANT ALL ON FUNCTION public.fn_is_mfa_enabled() TO service_role;
+
+
+--
+-- Name: FUNCTION fn_kiem_tra_an_ninh_taikhoan(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_kiem_tra_an_ninh_taikhoan() TO anon;
+GRANT ALL ON FUNCTION public.fn_kiem_tra_an_ninh_taikhoan() TO authenticated;
+GRANT ALL ON FUNCTION public.fn_kiem_tra_an_ninh_taikhoan() TO service_role;
+
+
+--
+-- Name: FUNCTION fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid, p_hocky text, p_tuan text, p_force boolean); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid, p_hocky text, p_tuan text, p_force boolean) TO anon;
+GRANT ALL ON FUNCTION public.fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid, p_hocky text, p_tuan text, p_force boolean) TO authenticated;
+GRANT ALL ON FUNCTION public.fn_kiem_tra_va_khoa_tuan(p_namhoc_id uuid, p_hocky text, p_tuan text, p_force boolean) TO service_role;
+
+
+--
+-- Name: FUNCTION fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text, p_namhoc_id uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text, p_namhoc_id uuid) TO anon;
+GRANT ALL ON FUNCTION public.fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text, p_namhoc_id uuid) TO authenticated;
+GRANT ALL ON FUNCTION public.fn_kiem_tra_xu_phat_tuan_thu_cong(p_tuan text, p_hocky text, p_namhoc_id uuid) TO service_role;
+
+
+--
+-- Name: FUNCTION fn_tu_dong_bam_mat_khau_taikhoan(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() TO anon;
+GRANT ALL ON FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() TO authenticated;
+GRANT ALL ON FUNCTION public.fn_tu_dong_bam_mat_khau_taikhoan() TO service_role;
+
+
+--
+-- Name: FUNCTION fn_tu_dong_khoa_tuan(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan() TO anon;
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan() TO authenticated;
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan() TO service_role;
+
+
+--
+-- Name: FUNCTION fn_tu_dong_khoa_tuan_va_xu_phat(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat() TO anon;
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat() TO authenticated;
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat() TO service_role;
+
+
+--
+-- Name: FUNCTION fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO anon;
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO authenticated;
+GRANT ALL ON FUNCTION public.fn_tu_dong_khoa_tuan_va_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO service_role;
+
+
+--
+-- Name: FUNCTION fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO anon;
+GRANT ALL ON FUNCTION public.fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO authenticated;
+GRANT ALL ON FUNCTION public.fn_xoa_tuan_hoc_toan_dien(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO service_role;
+
+
+--
+-- Name: FUNCTION fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO anon;
+GRANT ALL ON FUNCTION public.fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO authenticated;
+GRANT ALL ON FUNCTION public.fn_xu_phat_thu_cong(p_namhoc_id uuid, p_tuan_id uuid, p_username text, p_password text) TO service_role;
+
+
+--
+-- Name: FUNCTION get_auth_chidoan_id(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.get_auth_chidoan_id() TO anon;
+GRANT ALL ON FUNCTION public.get_auth_chidoan_id() TO authenticated;
+GRANT ALL ON FUNCTION public.get_auth_chidoan_id() TO service_role;
+
+
+--
+-- Name: FUNCTION get_auth_doanvien_id(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.get_auth_doanvien_id() TO anon;
+GRANT ALL ON FUNCTION public.get_auth_doanvien_id() TO authenticated;
+GRANT ALL ON FUNCTION public.get_auth_doanvien_id() TO service_role;
+
+
+--
+-- Name: FUNCTION get_auth_role(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.get_auth_role() TO anon;
+GRANT ALL ON FUNCTION public.get_auth_role() TO authenticated;
+GRANT ALL ON FUNCTION public.get_auth_role() TO service_role;
+
+
+--
+-- Name: FUNCTION get_chamdiem_history(p_id text, p_limit integer, p_offset integer); Type: ACL; Schema: public; Owner: -
+--
+
+REVOKE ALL ON FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) TO authenticated;
+GRANT ALL ON FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) TO service_role;
+
+
+--
+-- Name: FUNCTION get_my_role(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.get_my_role() TO anon;
+GRANT ALL ON FUNCTION public.get_my_role() TO authenticated;
+GRANT ALL ON FUNCTION public.get_my_role() TO service_role;
+
+
+--
+-- Name: FUNCTION get_secure_chidoan_id(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.get_secure_chidoan_id() TO anon;
+GRANT ALL ON FUNCTION public.get_secure_chidoan_id() TO authenticated;
+GRANT ALL ON FUNCTION public.get_secure_chidoan_id() TO service_role;
+
+
+--
+-- Name: FUNCTION get_secure_doanvien_id(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.get_secure_doanvien_id() TO anon;
+GRANT ALL ON FUNCTION public.get_secure_doanvien_id() TO authenticated;
+GRANT ALL ON FUNCTION public.get_secure_doanvien_id() TO service_role;
+
+
+--
+-- Name: FUNCTION get_secure_role(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.get_secure_role() TO anon;
+GRANT ALL ON FUNCTION public.get_secure_role() TO authenticated;
+GRANT ALL ON FUNCTION public.get_secure_role() TO service_role;
+
+
+--
+-- Name: FUNCTION get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text, p_chidoan_id uuid, p_doanvien_id uuid) TO anon;
+GRANT ALL ON FUNCTION public.get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text, p_chidoan_id uuid, p_doanvien_id uuid) TO authenticated;
+GRANT ALL ON FUNCTION public.get_student_violation_stats_advanced(p_namhoc_id uuid, p_hocky text, p_chidoan_id uuid, p_doanvien_id uuid) TO service_role;
+
+
+--
+-- Name: FUNCTION handle_chi_doan_deletion(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.handle_chi_doan_deletion() TO anon;
+GRANT ALL ON FUNCTION public.handle_chi_doan_deletion() TO authenticated;
+GRANT ALL ON FUNCTION public.handle_chi_doan_deletion() TO service_role;
+
+
+--
+-- Name: FUNCTION handle_post_like(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.handle_post_like() TO anon;
+GRANT ALL ON FUNCTION public.handle_post_like() TO authenticated;
+GRANT ALL ON FUNCTION public.handle_post_like() TO service_role;
+
+
+--
+-- Name: FUNCTION handle_update_likes_count(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.handle_update_likes_count() TO anon;
+GRANT ALL ON FUNCTION public.handle_update_likes_count() TO authenticated;
+GRANT ALL ON FUNCTION public.handle_update_likes_count() TO service_role;
+
+
+--
+-- Name: FUNCTION rpc_admin_reset_user_mfa(p_user_id text, p_username text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.rpc_admin_reset_user_mfa(p_user_id text, p_username text) TO anon;
+GRANT ALL ON FUNCTION public.rpc_admin_reset_user_mfa(p_user_id text, p_username text) TO authenticated;
+GRANT ALL ON FUNCTION public.rpc_admin_reset_user_mfa(p_user_id text, p_username text) TO service_role;
+
+
+--
+-- Name: FUNCTION rpc_authenticate_user(p_username text, p_password text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.rpc_authenticate_user(p_username text, p_password text) TO anon;
+GRANT ALL ON FUNCTION public.rpc_authenticate_user(p_username text, p_password text) TO authenticated;
+GRANT ALL ON FUNCTION public.rpc_authenticate_user(p_username text, p_password text) TO service_role;
+
+
+--
+-- Name: FUNCTION rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) TO anon;
+GRANT ALL ON FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) TO authenticated;
+GRANT ALL ON FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) TO service_role;
+
+
+--
+-- Name: FUNCTION rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_namhoc uuid, p_sdt text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_namhoc uuid, p_sdt text) TO anon;
+GRANT ALL ON FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_namhoc uuid, p_sdt text) TO authenticated;
+GRANT ALL ON FUNCTION public.rpc_create_account_secure(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_namhoc uuid, p_sdt text) TO service_role;
+
+
+--
+-- Name: FUNCTION rpc_delete_auth_users_by_usernames(p_usernames text[]); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.rpc_delete_auth_users_by_usernames(p_usernames text[]) TO anon;
+GRANT ALL ON FUNCTION public.rpc_delete_auth_users_by_usernames(p_usernames text[]) TO authenticated;
+GRANT ALL ON FUNCTION public.rpc_delete_auth_users_by_usernames(p_usernames text[]) TO service_role;
+
+
+--
+-- Name: FUNCTION rpc_get_user_by_username(p_username text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.rpc_get_user_by_username(p_username text) TO anon;
+GRANT ALL ON FUNCTION public.rpc_get_user_by_username(p_username text) TO authenticated;
+GRANT ALL ON FUNCTION public.rpc_get_user_by_username(p_username text) TO service_role;
+
+
+--
+-- Name: FUNCTION rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) TO anon;
+GRANT ALL ON FUNCTION public.rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) TO authenticated;
+GRANT ALL ON FUNCTION public.rpc_tao_tai_khoan_an_toan(p_username text, p_password text, p_fullname text, p_role text, p_chidoan_id uuid, p_doanvien_id uuid) TO service_role;
+
+
+--
+-- Name: FUNCTION save_user_backup_codes(p_encrypted_codes text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.save_user_backup_codes(p_encrypted_codes text) TO anon;
+GRANT ALL ON FUNCTION public.save_user_backup_codes(p_encrypted_codes text) TO authenticated;
+GRANT ALL ON FUNCTION public.save_user_backup_codes(p_encrypted_codes text) TO service_role;
+
+
+--
+-- Name: FUNCTION trigger_update_login_stats(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.trigger_update_login_stats() TO anon;
+GRANT ALL ON FUNCTION public.trigger_update_login_stats() TO authenticated;
+GRANT ALL ON FUNCTION public.trigger_update_login_stats() TO service_role;
+
+
+--
+-- Name: FUNCTION update_likes_count(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.update_likes_count() TO anon;
+GRANT ALL ON FUNCTION public.update_likes_count() TO authenticated;
+GRANT ALL ON FUNCTION public.update_likes_count() TO service_role;
+
+
+--
+-- Name: FUNCTION update_modified_column(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.update_modified_column() TO anon;
+GRANT ALL ON FUNCTION public.update_modified_column() TO authenticated;
+GRANT ALL ON FUNCTION public.update_modified_column() TO service_role;
+
+
+--
+-- Name: FUNCTION verify_and_consume_backup_code(p_code text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.verify_and_consume_backup_code(p_code text) TO anon;
+GRANT ALL ON FUNCTION public.verify_and_consume_backup_code(p_code text) TO authenticated;
+GRANT ALL ON FUNCTION public.verify_and_consume_backup_code(p_code text) TO service_role;
+
+
+--
+-- Name: TABLE activity_logs; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.activity_logs TO anon;
+GRANT ALL ON TABLE public.activity_logs TO authenticated;
+GRANT ALL ON TABLE public.activity_logs TO service_role;
+
+
+--
+-- Name: TABLE cauhinh_tieuchi_xet_thidua; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.cauhinh_tieuchi_xet_thidua TO anon;
+GRANT ALL ON TABLE public.cauhinh_tieuchi_xet_thidua TO authenticated;
+GRANT ALL ON TABLE public.cauhinh_tieuchi_xet_thidua TO service_role;
+
+
+--
+-- Name: TABLE chamdiem; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.chamdiem TO anon;
+GRANT ALL ON TABLE public.chamdiem TO authenticated;
+GRANT ALL ON TABLE public.chamdiem TO service_role;
+
+
+--
+-- Name: TABLE doanvien; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.doanvien TO anon;
+GRANT ALL ON TABLE public.doanvien TO authenticated;
+GRANT ALL ON TABLE public.doanvien TO service_role;
+
+
+--
+-- Name: TABLE dotptdoanvien; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.dotptdoanvien TO anon;
+GRANT ALL ON TABLE public.dotptdoanvien TO authenticated;
+GRANT ALL ON TABLE public.dotptdoanvien TO service_role;
+
+
+--
+-- Name: TABLE duytricsdl; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.duytricsdl TO anon;
+GRANT ALL ON TABLE public.duytricsdl TO authenticated;
+GRANT ALL ON TABLE public.duytricsdl TO service_role;
+
+
+--
+-- Name: TABLE gio_hoc_tap; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.gio_hoc_tap TO anon;
+GRANT ALL ON TABLE public.gio_hoc_tap TO authenticated;
+GRANT ALL ON TABLE public.gio_hoc_tap TO service_role;
+
+
+--
+-- Name: TABLE github_settings; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.github_settings TO anon;
+GRANT ALL ON TABLE public.github_settings TO authenticated;
+GRANT ALL ON TABLE public.github_settings TO service_role;
+
+
+--
+-- Name: TABLE homthugopy; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.homthugopy TO anon;
+GRANT ALL ON TABLE public.homthugopy TO authenticated;
+GRANT ALL ON TABLE public.homthugopy TO service_role;
+
+
+--
+-- Name: TABLE namhoc; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.namhoc TO anon;
+GRANT ALL ON TABLE public.namhoc TO authenticated;
+GRANT ALL ON TABLE public.namhoc TO service_role;
+
+
+--
+-- Name: TABLE phancong; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.phancong TO anon;
+GRANT ALL ON TABLE public.phancong TO authenticated;
+GRANT ALL ON TABLE public.phancong TO service_role;
+
+
+--
+-- Name: TABLE phanquyen; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.phanquyen TO anon;
+GRANT ALL ON TABLE public.phanquyen TO authenticated;
+GRANT ALL ON TABLE public.phanquyen TO service_role;
+
+
+--
+-- Name: SEQUENCE phanquyen_id_seq; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON SEQUENCE public.phanquyen_id_seq TO anon;
+GRANT ALL ON SEQUENCE public.phanquyen_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.phanquyen_id_seq TO service_role;
+
+
+--
+-- Name: TABLE ptdoanvien; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.ptdoanvien TO anon;
+GRANT ALL ON TABLE public.ptdoanvien TO authenticated;
+GRANT ALL ON TABLE public.ptdoanvien TO service_role;
+
+
+--
+-- Name: TABLE push_subscriptions; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.push_subscriptions TO anon;
+GRANT ALL ON TABLE public.push_subscriptions TO authenticated;
+GRANT ALL ON TABLE public.push_subscriptions TO service_role;
+
+
+--
+-- Name: TABLE ql_baocao; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.ql_baocao TO anon;
+GRANT ALL ON TABLE public.ql_baocao TO authenticated;
+GRANT ALL ON TABLE public.ql_baocao TO service_role;
+
+
+--
+-- Name: TABLE ql_nop_bc; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.ql_nop_bc TO anon;
+GRANT ALL ON TABLE public.ql_nop_bc TO authenticated;
+GRANT ALL ON TABLE public.ql_nop_bc TO service_role;
+
+
+--
+-- Name: TABLE qlchidoan; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.qlchidoan TO anon;
+GRANT ALL ON TABLE public.qlchidoan TO authenticated;
+GRANT ALL ON TABLE public.qlchidoan TO service_role;
+
+
+--
+-- Name: TABLE settings; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.settings TO anon;
+GRANT ALL ON TABLE public.settings TO authenticated;
+GRANT ALL ON TABLE public.settings TO service_role;
+
+
+--
+-- Name: TABLE taikhoan; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.taikhoan TO anon;
+GRANT ALL ON TABLE public.taikhoan TO authenticated;
+GRANT ALL ON TABLE public.taikhoan TO service_role;
+
+
+--
+-- Name: TABLE theodoi360; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.theodoi360 TO anon;
+GRANT ALL ON TABLE public.theodoi360 TO authenticated;
+GRANT ALL ON TABLE public.theodoi360 TO service_role;
+
+
+--
+-- Name: TABLE thongbao_hethong; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.thongbao_hethong TO anon;
+GRANT ALL ON TABLE public.thongbao_hethong TO authenticated;
+GRANT ALL ON TABLE public.thongbao_hethong TO service_role;
+
+
+--
+-- Name: TABLE thongbao_riengbiet; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.thongbao_riengbiet TO anon;
+GRANT ALL ON TABLE public.thongbao_riengbiet TO authenticated;
+GRANT ALL ON TABLE public.thongbao_riengbiet TO service_role;
+
+
+--
+-- Name: TABLE tieuchitd; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.tieuchitd TO anon;
+GRANT ALL ON TABLE public.tieuchitd TO authenticated;
+GRANT ALL ON TABLE public.tieuchitd TO service_role;
+
+
+--
+-- Name: TABLE tuanhoc; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.tuanhoc TO anon;
+GRANT ALL ON TABLE public.tuanhoc TO authenticated;
+GRANT ALL ON TABLE public.tuanhoc TO service_role;
+
+
+--
+-- Name: TABLE vanban_doan; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.vanban_doan TO anon;
+GRANT ALL ON TABLE public.vanban_doan TO authenticated;
+GRANT ALL ON TABLE public.vanban_doan TO service_role;
+
+
+--
+-- Name: TABLE xet_thidua; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.xet_thidua TO anon;
+GRANT ALL ON TABLE public.xet_thidua TO authenticated;
+GRANT ALL ON TABLE public.xet_thidua TO service_role;
+
+
+--
+-- Name: DEFAULT PRIVILEGES FOR SEQUENCES; Type: DEFAULT ACL; Schema: public; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
+
+
+--
+-- Name: DEFAULT PRIVILEGES FOR SEQUENCES; Type: DEFAULT ACL; Schema: public; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON SEQUENCES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON SEQUENCES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
+
+
+--
+-- Name: DEFAULT PRIVILEGES FOR FUNCTIONS; Type: DEFAULT ACL; Schema: public; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON FUNCTIONS TO postgres;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON FUNCTIONS TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON FUNCTIONS TO service_role;
+
+
+--
+-- Name: DEFAULT PRIVILEGES FOR FUNCTIONS; Type: DEFAULT ACL; Schema: public; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON FUNCTIONS TO postgres;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON FUNCTIONS TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON FUNCTIONS TO service_role;
+
+
+--
+-- Name: DEFAULT PRIVILEGES FOR TABLES; Type: DEFAULT ACL; Schema: public; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO postgres;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+
+
+--
+-- Name: DEFAULT PRIVILEGES FOR TABLES; Type: DEFAULT ACL; Schema: public; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON TABLES TO postgres;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
-\unrestrict dHm6Y8EvtKBT8H91XU80h6k00aMDX5RaHstomxK4az7ci8I2HGn2bj0bK9WoY1e
 
