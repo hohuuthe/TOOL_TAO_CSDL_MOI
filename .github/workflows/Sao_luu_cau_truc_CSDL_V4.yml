@@ -17,7 +17,7 @@
 #     vì đó là cú pháp/chỉ danh kỹ thuật bắt buộc.
 # =============================================================================
 
-name: V4 - Sao lưu cấu trúc cơ sở dữ liệu Supabase
+name: V4 - Tạo file SQL sao lưu CSDL Supabase
 
 on:
   workflow_dispatch:
