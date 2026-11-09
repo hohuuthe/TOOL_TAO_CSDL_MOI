@@ -1,0 +1,501 @@
+# =============================================================================
+# V7 - PHỤC HỒI DỮ LIỆU TỪ FILE SAO LƯU V6
+#
+# Mục đích:
+#   - Phục hồi gói backup DATA-ONLY đã được V6 tạo và mã hóa.
+#   - Nhận Run ID của lần V6 BACKUP_ONLY đã tạo artifact.
+#   - Luôn kiểm tra checksum, giải mã và phục hồi thử trên local sạch trước.
+#
+# Chế độ sử dụng:
+#   - KIEM_TRA_LOCAL: chỉ kiểm tra file backup, không ghi vào TARGET.
+#       Mã xác nhận: KIEM_TRA_BACKUP_V7
+#   - PHUC_HOI_TARGET: kiểm tra local rồi phục hồi sang TARGET.
+#       Mã xác nhận: PHUC_HOI_BACKUP_V7
+#
+# GitHub Actions Secrets:
+#   - BACKUP_ENCRYPTION_PASSWORD
+#   - SOURCE_DB_URL và TARGET_DB_URL khi chọn PHUC_HOI_TARGET
+#
+# Tương thích:
+#   - Chấp nhận Run ID từ cả tên workflow V6 cũ và tên V6 tiếng Việt mới.
+# =============================================================================
+
+name: V7 - Phục hồi dữ liệu từ file sao lưu V6
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_run_id:
+        description: "Run ID của lần V6 BACKUP_ONLY đã tạo artifact V6-FULL-DATA-ENCRYPTED"
+        required: true
+        type: string
+      che_do:
+        description: "Kiểm tra bản sao trên local hoặc phục hồi vào TARGET_DB_URL"
+        required: true
+        default: KIEM_TRA_LOCAL
+        type: choice
+        options:
+          - KIEM_TRA_LOCAL
+          - PHUC_HOI_TARGET
+      xac_nhan:
+        description: "KIEM_TRA_LOCAL: nhập KIEM_TRA_BACKUP_V7 | PHUC_HOI_TARGET: nhập PHUC_HOI_BACKUP_V7"
+        required: true
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/Phuc_hoi_file_sao_luu_du_lieu_V7.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: supabase-restore-v7
+  cancel-in-progress: false
+
+env:
+  V5_SCHEMA: supabase/backups/v5/V5_khoi_tao_cau_truc_va_phuc_hoi.sql
+  RESTORE_DIR: /tmp/v7-restore
+
+jobs:
+  self_test_create_fixture:
+    name: V7 - Tự kiểm thử: tạo gói sao lưu giả lập đã mã hóa
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Tạo gói sao lưu giả lập
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/v7-fixture
+          cat > /tmp/v7-fixture/V6_full_data.sql <<'SQL'
+          COPY public.v7_fixture (id, value) FROM stdin;
+          1	alpha
+          2	beta
+          \.
+          SQL
+          printf 'public.v7_fixture\t2\n' > /tmp/v7-fixture/V6_row_counts.tsv
+          printf 'public.v7_fixture\n' > /tmp/v7-fixture/relations.txt
+          tar -C /tmp/v7-fixture -czf /tmp/v7-fixture/V6_full_data_package.tar.gz \
+            V6_full_data.sql V6_row_counts.tsv relations.txt
+          printf '%s' 'V7-FIXTURE-ONLY-NOT-A-SECRET' | gpg \
+            --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --symmetric --cipher-algo AES256 --s2k-digest-algo SHA512 \
+            --output /tmp/v7-fixture/V6_full_data_package.tar.gz.gpg \
+            /tmp/v7-fixture/V6_full_data_package.tar.gz
+          (cd /tmp/v7-fixture && sha256sum V6_full_data_package.tar.gz.gpg > V6_full_data_package.sha256)
+
+      - name: Tải artifact giả lập lên GitHub
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: V7-SELF-TEST-FIXTURE
+          path: |
+            /tmp/v7-fixture/V6_full_data_package.tar.gz.gpg
+            /tmp/v7-fixture/V6_full_data_package.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  self_test_restore_fixture:
+    name: V7 - Tự kiểm thử: tải, giải mã, phục hồi và xác minh
+    if: github.event_name == 'push'
+    needs: self_test_create_fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Tải artifact giả lập từ cùng Run ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: V7-SELF-TEST-FIXTURE
+          path: /tmp/v7-fixture-restore
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+
+      - name: Cài psql và phục hồi dữ liệu giả lập
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client gnupg
+          cd /tmp/v7-fixture-restore
+          sha256sum -c V6_full_data_package.sha256
+          printf '%s' 'V7-FIXTURE-ONLY-NOT-A-SECRET' | gpg \
+            --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --decrypt --output V6_full_data_package.tar.gz \
+            V6_full_data_package.tar.gz.gpg
+          tar -xzf V6_full_data_package.tar.gz
+          export PGPASSWORD=postgres
+          psql "postgresql://postgres@127.0.0.1:5432/postgres" -X -v ON_ERROR_STOP=1 \
+            -c "CREATE TABLE public.v7_fixture(id integer primary key, value text);"
+          psql "postgresql://postgres@127.0.0.1:5432/postgres" -X \
+            --single-transaction -v ON_ERROR_STOP=1 \
+            -f V6_full_data.sql
+          test "$(psql "postgresql://postgres@127.0.0.1:5432/postgres" -X -Atq -c "SELECT count(*) FROM public.v7_fixture;")" = "2"
+          echo "V7 - TỰ KIỂM THỬ: ĐẠT"
+
+  restore_v6_backup:
+    name: V7 - Kiểm tra và phục hồi bản sao lưu V6
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Xác nhận dữ liệu đầu vào
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case "${{ inputs.backup_run_id }}" in
+            ''|*[!0-9]*)
+              echo "ERROR: backup_run_id phai la so."
+              exit 1
+              ;;
+          esac
+          case "${{ inputs.che_do }}" in
+            KIEM_TRA_LOCAL)
+              test "${{ inputs.xac_nhan }}" = "KIEM_TRA_BACKUP_V7" || {
+                echo "ERROR: KIEM_TRA_LOCAL phai nhap KIEM_TRA_BACKUP_V7."
+                exit 1
+              }
+              ;;
+            PHUC_HOI_TARGET)
+              test "${{ inputs.xac_nhan }}" = "PHUC_HOI_BACKUP_V7" || {
+                echo "ERROR: PHUC_HOI_TARGET phai nhap PHUC_HOI_BACKUP_V7."
+                exit 1
+              }
+              ;;
+            *)
+              echo "ERROR: che_do khong hop le."
+              exit 1
+              ;;
+          esac
+
+      - name: Xác minh Run ID thuộc workflow V6 và đã chạy thành công
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
+        run: |
+          set -Eeuo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${BACKUP_RUN_ID}"
+          json=$(curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api")
+          path=$(printf '%s' "$json" | jq -r '.path')
+          conclusion=$(printf '%s' "$json" | jq -r '.conclusion')
+          event=$(printf '%s' "$json" | jq -r '.event')
+          if [ "$path" != ".github/workflows/Sao_luu_FULL_DATA_V6.yml" ] && [ "$path" != ".github/workflows/Sao_luu_va_phuc_hoi_du_lieu_CSDL_V6.yml" ]; then
+            echo "ERROR: Run ID khong thuoc V6."
+            exit 1
+          fi
+          if [ "$conclusion" != "success" ]; then
+            echo "ERROR: Run V6 chua success."
+            exit 1
+          fi
+          if [ "$event" != "workflow_dispatch" ]; then
+            echo "ERROR: Backup artifact hop le phai duoc tao tu V6 chay manual BACKUP_ONLY."
+            exit 1
+          fi
+          echo "V7 - KIỂM TRA RUN BACKUP V6: ĐẠT"
+
+      - name: Tải artifact sao lưu của V6
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: V6-FULL-DATA-ENCRYPTED
+          path: /tmp/v7-restore
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.backup_run_id }}
+
+      - name: Giải mã và kiểm tra gói sao lưu
+        id: package
+        shell: bash
+        env:
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_ENCRYPTION_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          cd "$RESTORE_DIR"
+          test -s V6_full_data_package.tar.gz.gpg
+          test -s V6_full_data_package.sha256
+          sha256sum -c V6_full_data_package.sha256
+
+          if [ -z "${BACKUP_PASSWORD:-}" ] || [ "${#BACKUP_PASSWORD}" -lt 20 ]; then
+            echo "ERROR: BACKUP_ENCRYPTION_PASSWORD thieu hoac qua ngan."
+            exit 1
+          fi
+          echo "::add-mask::$BACKUP_PASSWORD"
+
+          printf '%s' "$BACKUP_PASSWORD" | gpg \
+            --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --decrypt \
+            --output V6_full_data_package.tar.gz \
+            V6_full_data_package.tar.gz.gpg
+
+          # Chan path traversal truoc khi extract.
+          if tar -tzf V6_full_data_package.tar.gz | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+            echo "ERROR: Backup tar co path khong an toan."
+            exit 1
+          fi
+          tar -xzf V6_full_data_package.tar.gz
+
+          test -s V6_full_data.sql
+          test -s V6_row_counts.tsv
+          test -s relations.txt
+
+          if [ -f V6_plaintext.sha256 ]; then
+            sha256sum -c V6_plaintext.sha256
+            echo "V7 PLAINTEXT CHECKSUM: PASSED"
+          else
+            echo "V7 NOTE: Goi V6 cu khong co V6_plaintext.sha256; da xac minh checksum file ma hoa."
+          fi
+
+          grep -Eq '^COPY .* FROM stdin;[[:space:]]*$' V6_full_data.sql
+          if grep -Eq '^(CREATE TABLE|CREATE FUNCTION|CREATE SCHEMA|ALTER TABLE)[[:space:]]' V6_full_data.sql; then
+            echo "ERROR: Backup khong phai DATA-ONLY."
+            exit 1
+          fi
+
+          for required_rel in auth.users auth.identities auth.sessions storage.buckets storage.objects; do
+            grep -Fxq "$required_rel" relations.txt || {
+              echo "ERROR: Backup thieu relation cot loi $required_rel."
+              exit 1
+            }
+          done
+
+          tables=$(wc -l < V6_row_counts.tsv | tr -d ' ')
+          rows=$(awk -F '\t' '{s+=$2} END {printf "%.0f", s+0}' V6_row_counts.tsv)
+          auth_users=$(awk -F '\t' '$1=="auth.users" {print $2}' V6_row_counts.tsv)
+          test -n "$auth_users"
+          echo "tables=$tables" >> "$GITHUB_OUTPUT"
+          echo "rows=$rows" >> "$GITHUB_OUTPUT"
+          echo "auth_users=$auth_users" >> "$GITHUB_OUTPUT"
+          echo "V7_BACKUP_TABLES=$tables"
+          echo "V7_BACKUP_ROWS=$rows"
+          echo "V7_BACKUP_AUTH_USERS=$auth_users"
+          echo "V7 - KIỂM TRA GÓI SAO LƯU: ĐẠT"
+
+      - name: Cài PostgreSQL Client 17
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          PGDG_FPR=$(gpg --batch --with-colons --show-keys /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            | awk -F: '$1=="fpr" {print $10; exit}')
+          test "$PGDG_FPR" = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Cài Supabase CLI 3.0.0
+        uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3.2.0
+        with:
+          version: 3.0.0
+
+      - name: Kiểm thử phục hồi bản sao lưu trên Supabase local sạch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s "$V5_SCHEMA"
+          rm -rf /tmp/v7-local
+          mkdir -p /tmp/v7-local
+          cd /tmp/v7-local
+          supabase init
+          supabase db start
+
+          export PGPASSWORD=postgres
+          LOCAL_DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+
+          /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X \
+            --single-transaction -v ON_ERROR_STOP=1 \
+            -f "$GITHUB_WORKSPACE/$V5_SCHEMA"
+
+          /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X \
+            --single-transaction -v ON_ERROR_STOP=1 \
+            -c "SET session_replication_role = replica;" \
+            -f "$RESTORE_DIR/V6_full_data.sql"
+
+          mismatches=0
+          checked=0
+          while IFS=$'\t' read -r rel expected; do
+            [ -n "$rel" ] || continue
+            actual=$(/usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM $rel;")
+            checked=$((checked+1))
+            if [ "$actual" != "$expected" ]; then
+              echo "LOCAL_MISMATCH $rel expected=$expected actual=$actual"
+              mismatches=$((mismatches+1))
+            fi
+          done < "$RESTORE_DIR/V6_row_counts.tsv"
+
+          test "$checked" = "${{ steps.package.outputs.tables }}"
+          test "$mismatches" -eq 0
+
+          local_auth=$(/usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM auth.users;")
+          test "$local_auth" = "${{ steps.package.outputs.auth_users }}"
+
+          if [ -s "$RESTORE_DIR/V6_row_hashes.tsv" ]; then
+            hash_mismatches=0
+            while IFS=$'\t' read -r rel expected_hash; do
+              [ -n "$rel" ] || continue
+              actual_hash=$(/usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT md5(COALESCE(string_agg(h, '' ORDER BY h), '')) FROM (SELECT md5(row_to_json(t)::text) AS h FROM $rel t) s;")
+              [ "$actual_hash" = "$expected_hash" ] || hash_mismatches=$((hash_mismatches+1))
+            done < "$RESTORE_DIR/V6_row_hashes.tsv"
+            test "$hash_mismatches" -eq 0
+          fi
+
+          echo "V7 - KIỂM THỬ PHỤC HỒI LOCAL: ĐẠT"
+
+      - name: Dừng sau khi chỉ kiểm tra local
+        if: inputs.che_do == 'KIEM_TRA_LOCAL'
+        shell: bash
+        run: |
+          echo "V7 chi kiem tra backup local: PASSED. Khong ghi vao TARGET."
+
+      - name: Kiểm tra TARGET và tự động nạp cấu trúc V5 nếu TARGET mới
+        if: inputs.che_do == 'PHUC_HOI_TARGET'
+        shell: bash
+        env:
+          SOURCE_SECRET: ${{ secrets.SOURCE_DB_URL }}
+          TARGET_SECRET: ${{ secrets.TARGET_DB_URL }}
+        run: |
+          set -Eeuo pipefail
+          if [ -z "${SOURCE_SECRET:-}" ] || [ -z "${TARGET_SECRET:-}" ]; then
+            echo "ERROR: Can SOURCE_DB_URL va TARGET_DB_URL."
+            exit 1
+          fi
+          echo "::add-mask::$SOURCE_SECRET"
+          echo "::add-mask::$TARGET_SECRET"
+          SOURCE_URL="${SOURCE_SECRET/:6543/:5432}"
+          TARGET_URL="${TARGET_SECRET/:6543/:5432}"
+          echo "::add-mask::$SOURCE_URL"
+          echo "::add-mask::$TARGET_URL"
+
+          identity() {
+            printf '%s' "$1" | sed -E 's#^[^:]+://([^:]+):[^@]*@([^/:?]+).*#\1@\2#'
+          }
+          SRC_ID=$(identity "$SOURCE_URL")
+          TGT_ID=$(identity "$TARGET_URL")
+          if [ -z "$SRC_ID" ] || [ -z "$TGT_ID" ] || [ "$SRC_ID" = "$TGT_ID" ]; then
+            echo "ERROR: SOURCE va TARGET giong nhau hoac khong xac dinh duoc."
+            exit 1
+          fi
+
+          SRC_MAJOR=$(/usr/lib/postgresql/17/bin/psql "$SOURCE_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT current_setting('server_version_num')::int / 10000;")
+          TGT_MAJOR=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT current_setting('server_version_num')::int / 10000;")
+          test "$SRC_MAJOR" = "$TGT_MAJOR"
+
+          public_total=0
+          public_existing=0
+          while IFS= read -r rel; do
+            case "$rel" in
+              public.*|audit.*)
+                public_total=$((public_total+1))
+                exists=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -v rel="$rel" -c "SELECT to_regclass(:'rel') IS NOT NULL;")
+                [ "$exists" = "t" ] && public_existing=$((public_existing+1))
+                ;;
+            esac
+          done < "$RESTORE_DIR/relations.txt"
+
+          if [ "$public_existing" = "0" ]; then
+            echo "TARGET chua co application schema; nap V5 schema."
+            /usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X \
+              --single-transaction -v ON_ERROR_STOP=1 \
+              -f "$GITHUB_WORKSPACE/$V5_SCHEMA"
+          elif [ "$public_existing" != "$public_total" ]; then
+            echo "ERROR: TARGET co schema dang do dang ($public_existing/$public_total relations)."
+            exit 1
+          else
+            echo "TARGET da co application schema day du."
+          fi
+
+          # Tat ca relation trong backup phai ton tai va rong.
+          while IFS=$'\t' read -r rel expected; do
+            [ -n "$rel" ] || continue
+            exists=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -v rel="$rel" -c "SELECT to_regclass(:'rel') IS NOT NULL;")
+            if [ "$exists" != "t" ]; then
+              echo "ERROR: TARGET thieu relation $rel."
+              exit 1
+            fi
+            current=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM $rel;")
+            if [ "$current" != "0" ]; then
+              echo "ERROR: TARGET $rel khong trong (rows=$current)."
+              exit 1
+            fi
+          done < "$RESTORE_DIR/V6_row_counts.tsv"
+
+          echo "TARGET_URL=$TARGET_URL" >> "$GITHUB_ENV"
+          echo "V7 - KIỂM TRA TARGET TRƯỚC PHỤC HỒI: ĐẠT"
+
+      - name: Phục hồi bản sao lưu vào TARGET trong một transaction
+        if: inputs.che_do == 'PHUC_HOI_TARGET'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          /usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X \
+            --single-transaction -v ON_ERROR_STOP=1 \
+            -c "SET session_replication_role = replica;" \
+            -f "$RESTORE_DIR/V6_full_data.sql"
+          echo "V7 - PHỤC HỒI TARGET ĐÃ COMMIT TRANSACTION"
+
+      - name: Kiểm tra TARGET sau khi phục hồi
+        if: inputs.che_do == 'PHUC_HOI_TARGET'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mismatches=0
+          checked=0
+          while IFS=$'\t' read -r rel expected; do
+            [ -n "$rel" ] || continue
+            actual=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM $rel;")
+            checked=$((checked+1))
+            if [ "$actual" != "$expected" ]; then
+              echo "TARGET_MISMATCH $rel expected=$expected actual=$actual"
+              mismatches=$((mismatches+1))
+            fi
+          done < "$RESTORE_DIR/V6_row_counts.tsv"
+
+          test "$checked" = "${{ steps.package.outputs.tables }}"
+          test "$mismatches" -eq 0
+          target_auth=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM auth.users;")
+          test "$target_auth" = "${{ steps.package.outputs.auth_users }}"
+
+          if [ -s "$RESTORE_DIR/V6_row_hashes.tsv" ]; then
+            hash_mismatches=0
+            while IFS=$'\t' read -r rel expected_hash; do
+              [ -n "$rel" ] || continue
+              actual_hash=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT md5(COALESCE(string_agg(h, '' ORDER BY h), '')) FROM (SELECT md5(row_to_json(t)::text) AS h FROM $rel t) s;")
+              [ "$actual_hash" = "$expected_hash" ] || hash_mismatches=$((hash_mismatches+1))
+            done < "$RESTORE_DIR/V6_row_hashes.tsv"
+            test "$hash_mismatches" -eq 0
+          fi
+
+          echo "V7 - KIỂM TRA TARGET SAU PHỤC HỒI: ĐẠT"
+
+      - name: Xóa dữ liệu tạm
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          rm -rf "$RESTORE_DIR"
+          echo "V7 - ĐÃ XÓA DỮ LIỆU TẠM"
