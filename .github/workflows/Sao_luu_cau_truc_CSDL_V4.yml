@@ -142,6 +142,8 @@ jobs:
           sed -i -E \
             -e '/^CREATE SCHEMA public;[[:space:]]*$/d' \
             -e '/^ALTER SCHEMA public /d' \
+            -e 's/^CREATE SCHEMA ([^;]+);$/CREATE SCHEMA IF NOT EXISTS \\1;/' \
+            -e '/^ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin /d' \
             -e '/^\\(un)?restrict[[:space:]]/d' \
             -e '/^SET transaction_timeout = 0;[[:space:]]*$/d' \
             "$SQL_FILE"
@@ -239,6 +241,21 @@ jobs:
           # ------------------------------------------------------------------
           if grep -Eq '^-- Data for Name: .*; Type: TABLE DATA;' "$SQL_FILE"; then
             echo "ERROR: Phát hiện TABLE DATA section trong file schema-only."
+            exit 1
+          fi
+
+          if grep -Fxq 'CREATE SCHEMA audit;' "$SQL_FILE"; then
+            echo "LỖI: File V4 vẫn còn CREATE SCHEMA audit; và sẽ lỗi 42P06 nếu audit đã tồn tại."
+            exit 1
+          fi
+          if grep -Fq -- '--   - audit' "$SQL_FILE"; then
+            grep -Fq 'CREATE SCHEMA IF NOT EXISTS audit;' "$SQL_FILE" || {
+              echo "LỖI: File V4 chưa tạo audit theo dạng IF NOT EXISTS."
+              exit 1
+            }
+          fi
+          if grep -Eq '^ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin ' "$SQL_FILE"; then
+            echo "LỖI: File V4 còn default privileges của supabase_admin, có thể lỗi quyền khi phục hồi."
             exit 1
           fi
 
