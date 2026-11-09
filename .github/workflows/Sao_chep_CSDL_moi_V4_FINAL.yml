@@ -173,11 +173,226 @@ jobs:
           cat "$META_SQL" "$RAW_SQL" > "$SQL_FILE"
           test -s "$SQL_FILE"
 
-          # Schema-only phải tuyệt đối không mang dữ liệu bảng.
-          if grep -Eq '^[[:space:]]*(COPY|INSERT[[:space:]]+INTO)[[:space:]]' "$SQL_FILE"; then
-            echo "ERROR: Phát hiện câu lệnh dữ liệu COPY/INSERT trong schema-only SQL."
+          # Schema-only phải tuyệt đối không mang TABLE DATA.
+          # Không cấm INSERT/COPY nằm bên trong thân hàm PL/pgSQL vì đó là
+          # mã nguồn của function, không phải dữ liệu được restore.
+          if grep -Eq '^-- Data for Name: .*; Type: TABLE DATA;' "$SQL_FILE"; then
+            echo "ERROR: Phát hiện TABLE DATA section trong schema-only SQL."
+            grep -En '^-- Data for Name: .*; Type: TABLE DATA;' "$SQL_FILE" | head -20
             exit 1
           fi
+          if grep -Eq '^COPY[[:space:]].*[[:space:]]FROM[[:space:]]stdin;[[:space:]]*
+
+          # Kiểm tra audit theo SOURCE thật, không tự bịa audit mẫu.
+          SOURCE_HAS_AUDIT=$("${PSQL[@]}" -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='audit') THEN '1' ELSE '0' END;")
+          if [ "$SOURCE_HAS_AUDIT" = "1" ]; then
+            grep -Eq '^CREATE SCHEMA audit;' "$SQL_FILE" || {
+              echo "ERROR: SOURCE có schema audit nhưng SQL V4 thiếu CREATE SCHEMA audit."
+              exit 1
+            }
+
+            SOURCE_HAS_RECORD_VERSION=$("${PSQL[@]}" -c "SELECT CASE WHEN to_regclass('audit.record_version') IS NOT NULL THEN '1' ELSE '0' END;")
+            if [ "$SOURCE_HAS_RECORD_VERSION" = "1" ]; then
+              grep -Eq 'CREATE TABLE audit\.record_version' "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit.record_version nhưng SQL V4 thiếu bảng này."
+                exit 1
+              }
+            fi
+
+            "${PSQL[@]}" -c "SELECT quote_ident(t.tgname)
+              FROM pg_trigger t
+              JOIN pg_class c ON c.oid=t.tgrelid
+              JOIN pg_namespace cn ON cn.oid=c.relnamespace
+              JOIN pg_proc p ON p.oid=t.tgfoid
+              JOIN pg_namespace pn ON pn.oid=p.pronamespace
+              WHERE NOT t.tgisinternal
+                AND pn.nspname='audit'
+                AND cn.nspname <> 'information_schema'
+                AND cn.nspname NOT LIKE 'pg_%'
+              ORDER BY cn.nspname, c.relname, t.tgname;" > "$AUDIT_TRIGGER_LIST_FILE"
+
+            while IFS= read -r trigger_name; do
+              [ -n "$trigger_name" ] || continue
+              grep -Fq "TRIGGER $trigger_name " "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit trigger [$trigger_name] nhưng SQL V4 bị thiếu."
+                exit 1
+              }
+            done < "$AUDIT_TRIGGER_LIST_FILE"
+
+            echo "AUDIT COVERAGE CHECK: PASSED"
+          else
+            echo "AUDIT: SOURCE không có schema audit; V4 không tự thêm audit giả."
+          fi
+
+          # Log inventory nguồn để đối chiếu mỗi lần chạy.
+          "${PSQL[@]}" <<'SQL'
+          SELECT 'application_tables=' || count(*)
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE c.relkind IN ('r','p')
+            AND n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+
+          SELECT 'application_functions=' || count(*)
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+
+          SELECT 'application_triggers=' || count(*)
+          FROM pg_trigger t
+          JOIN pg_class c ON c.oid=t.tgrelid
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE NOT t.tgisinternal
+            AND n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+
+          SELECT 'application_policies=' || count(*)
+          FROM pg_policy pol
+          JOIN pg_class c ON c.oid=pol.polrelid
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+          SQL
+
+          echo "SQL_FILE=$SQL_FILE"
+          echo "SQL_BYTES=$(wc -c < "$SQL_FILE")"
+          echo "SQL_LINES=$(wc -l < "$SQL_FILE")"
+          echo "SQL_SHA256=$(sha256sum "$SQL_FILE" | awk '{print $1}')"
+          echo "V4 SOURCE SNAPSHOT VALIDATION: PASSED"
+
+      - name: Commit file SQL V4 FINAL vào repository
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Chỉ stage đúng file SQL mới của V4; tuyệt đối không đụng file SQL cũ
+          # và không sửa các workflow cũ.
+          git add -- "$SQL_FILE"
+
+          if git diff --cached --quiet; then
+            echo "SQL V4 không thay đổi so với snapshot đang lưu; không cần commit."
+            exit 0
+          fi
+
+          git commit -m "chore: cập nhật SQL V4 FINAL từ SOURCE ngày $(date -u +'%d-%m-%Y')"
+          git push origin HEAD:main
+          echo "V4 SQL COMMIT: SUCCESS"
+ "$SQL_FILE"; then
+            echo "ERROR: Phát hiện top-level COPY ... FROM stdin trong schema-only SQL."
+            grep -En '^COPY[[:space:]].*[[:space:]]FROM[[:space:]]stdin;[[:space:]]*
+
+          # Kiểm tra audit theo SOURCE thật, không tự bịa audit mẫu.
+          SOURCE_HAS_AUDIT=$("${PSQL[@]}" -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='audit') THEN '1' ELSE '0' END;")
+          if [ "$SOURCE_HAS_AUDIT" = "1" ]; then
+            grep -Eq '^CREATE SCHEMA audit;' "$SQL_FILE" || {
+              echo "ERROR: SOURCE có schema audit nhưng SQL V4 thiếu CREATE SCHEMA audit."
+              exit 1
+            }
+
+            SOURCE_HAS_RECORD_VERSION=$("${PSQL[@]}" -c "SELECT CASE WHEN to_regclass('audit.record_version') IS NOT NULL THEN '1' ELSE '0' END;")
+            if [ "$SOURCE_HAS_RECORD_VERSION" = "1" ]; then
+              grep -Eq 'CREATE TABLE audit\.record_version' "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit.record_version nhưng SQL V4 thiếu bảng này."
+                exit 1
+              }
+            fi
+
+            "${PSQL[@]}" -c "SELECT quote_ident(t.tgname)
+              FROM pg_trigger t
+              JOIN pg_class c ON c.oid=t.tgrelid
+              JOIN pg_namespace cn ON cn.oid=c.relnamespace
+              JOIN pg_proc p ON p.oid=t.tgfoid
+              JOIN pg_namespace pn ON pn.oid=p.pronamespace
+              WHERE NOT t.tgisinternal
+                AND pn.nspname='audit'
+                AND cn.nspname <> 'information_schema'
+                AND cn.nspname NOT LIKE 'pg_%'
+              ORDER BY cn.nspname, c.relname, t.tgname;" > "$AUDIT_TRIGGER_LIST_FILE"
+
+            while IFS= read -r trigger_name; do
+              [ -n "$trigger_name" ] || continue
+              grep -Fq "TRIGGER $trigger_name " "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit trigger [$trigger_name] nhưng SQL V4 bị thiếu."
+                exit 1
+              }
+            done < "$AUDIT_TRIGGER_LIST_FILE"
+
+            echo "AUDIT COVERAGE CHECK: PASSED"
+          else
+            echo "AUDIT: SOURCE không có schema audit; V4 không tự thêm audit giả."
+          fi
+
+          # Log inventory nguồn để đối chiếu mỗi lần chạy.
+          "${PSQL[@]}" <<'SQL'
+          SELECT 'application_tables=' || count(*)
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE c.relkind IN ('r','p')
+            AND n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+
+          SELECT 'application_functions=' || count(*)
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+
+          SELECT 'application_triggers=' || count(*)
+          FROM pg_trigger t
+          JOIN pg_class c ON c.oid=t.tgrelid
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE NOT t.tgisinternal
+            AND n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+
+          SELECT 'application_policies=' || count(*)
+          FROM pg_policy pol
+          JOIN pg_class c ON c.oid=pol.polrelid
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+          SQL
+
+          echo "SQL_FILE=$SQL_FILE"
+          echo "SQL_BYTES=$(wc -c < "$SQL_FILE")"
+          echo "SQL_LINES=$(wc -l < "$SQL_FILE")"
+          echo "SQL_SHA256=$(sha256sum "$SQL_FILE" | awk '{print $1}')"
+          echo "V4 SOURCE SNAPSHOT VALIDATION: PASSED"
+
+      - name: Commit file SQL V4 FINAL vào repository
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Chỉ stage đúng file SQL mới của V4; tuyệt đối không đụng file SQL cũ
+          # và không sửa các workflow cũ.
+          git add -- "$SQL_FILE"
+
+          if git diff --cached --quiet; then
+            echo "SQL V4 không thay đổi so với snapshot đang lưu; không cần commit."
+            exit 0
+          fi
+
+          git commit -m "chore: cập nhật SQL V4 FINAL từ SOURCE ngày $(date -u +'%d-%m-%Y')"
+          git push origin HEAD:main
+          echo "V4 SQL COMMIT: SUCCESS"
+ "$SQL_FILE" | head -20
+            exit 1
+          fi
+          echo "SCHEMA-ONLY DATA CHECK: PASSED"
 
           # Kiểm tra audit theo SOURCE thật, không tự bịa audit mẫu.
           SOURCE_HAS_AUDIT=$("${PSQL[@]}" -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='audit') THEN '1' ELSE '0' END;")
