@@ -1,0 +1,427 @@
+# =============================================================================
+# V5 - SAO LƯU VÀ PHỤC HỒI CẤU TRÚC CƠ SỞ DỮ LIỆU SUPABASE
+#
+# Mục đích:
+#   - Kế thừa V4 để tạo file SQL cấu trúc từ SOURCE_DB_URL.
+#   - Kiểm thử phục hồi trên Supabase local sạch trước khi dùng thật.
+#   - Khi chạy thủ công, có thể phục hồi cấu trúc sang TARGET_DB_URL.
+#
+# Hướng dẫn sử dụng:
+#   1. Khai báo SOURCE_DB_URL và TARGET_DB_URL trong GitHub Actions Secrets.
+#   2. Muốn phục hồi thật, chạy thủ công và nhập mã: PHUC_HOI_V5.
+#   3. TARGET phải là cơ sở dữ liệu mới/trống và phải khác SOURCE.
+#
+# Lưu ý:
+#   - V5 chỉ sao lưu/phục hồi CẤU TRÚC, không chứa dữ liệu bản ghi.
+#   - Phục hồi dùng transaction và ON_ERROR_STOP để tránh tạo dở dang.
+# =============================================================================
+
+name: V5 - Sao lưu và phục hồi cấu trúc cơ sở dữ liệu Supabase
+
+on:
+  workflow_dispatch:
+    inputs:
+      xac_nhan:
+        description: "Nhập PHUC_HOI_V5 để xác nhận phục hồi vào TARGET_DB_URL"
+        required: true
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/Sao_luu_va_phuc_hoi_cau_truc_CSDL_V5.yml'
+
+concurrency:
+  group: supabase-clone-v5
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build_and_local_verify:
+    name: V5 - Sao lưu SOURCE và kiểm thử phục hồi trên local sạch
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      tables: ${{ steps.inventory.outputs.tables }}
+      functions: ${{ steps.inventory.outputs.functions }}
+      triggers: ${{ steps.inventory.outputs.triggers }}
+      policies: ${{ steps.inventory.outputs.policies }}
+      rls: ${{ steps.inventory.outputs.rls }}
+      rel_acl: ${{ steps.inventory.outputs.rel_acl }}
+      fn_acl: ${{ steps.inventory.outputs.fn_acl }}
+      source_pg_major: ${{ steps.inventory.outputs.source_pg_major }}
+      has_audit: ${{ steps.inventory.outputs.has_audit }}
+
+    env:
+      V5_SQL_FILE: supabase/backups/v5/V5_khoi_tao_cau_truc_va_phuc_hoi.sql
+      V5_ARTIFACT_DIR: /tmp/v5-artifact
+
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Xác nhận chế độ chạy thủ công
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.xac_nhan }}" != "PHUC_HOI_V5" ]; then
+            echo "LỖI: Phải nhập đúng PHUC_HOI_V5."
+            exit 1
+          fi
+
+      - name: Cài PostgreSQL Client 17
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          PGDG_FPR=$(gpg --batch --with-colons --show-keys /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            | awk -F: '$1=="fpr" {print $10; exit}')
+          test "$PGDG_FPR" = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Cài Supabase CLI để kiểm thử phục hồi local
+        uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3.2.0
+        with:
+          version: latest
+
+      - name: Tạo file SQL cấu trúc V5 từ SOURCE
+        id: inventory
+        shell: bash
+        env:
+          DB_URL: ${{ secrets.SOURCE_DB_URL }}
+        run: |
+          set -Eeuo pipefail
+          if [ -z "${DB_URL:-}" ]; then
+            echo "ERROR: SOURCE_DB_URL chua duoc cau hinh."
+            exit 1
+          fi
+          echo "::add-mask::$DB_URL"
+          SOURCE_URL="${DB_URL/:6543/:5432}"
+          echo "::add-mask::$SOURCE_URL"
+
+          PSQL=(/usr/lib/postgresql/17/bin/psql "$SOURCE_URL" -X -v ON_ERROR_STOP=1 -Atq)
+          PG_DUMP=/usr/lib/postgresql/17/bin/pg_dump
+
+          mkdir -p "$(dirname "$V5_SQL_FILE")" "$V5_ARTIFACT_DIR"
+          SCHEMAS="$V5_ARTIFACT_DIR/application_schemas.txt"
+          RAW="$V5_ARTIFACT_DIR/source_raw.sql"
+          CANON="$V5_ARTIFACT_DIR/source_canon.sql"
+          META="$V5_ARTIFACT_DIR/meta.sql"
+
+          "${PSQL[@]}" <<'SQL' > "$SCHEMAS"
+          SELECT n.nspname
+          FROM pg_namespace n
+          WHERE n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN (
+              'auth','storage','realtime','graphql','graphql_public','extensions',
+              'pgbouncer','pgsodium','pgsodium_masks','vault','cron',
+              'supabase_functions','supabase_migrations','net','_realtime','_analytics'
+            )
+          ORDER BY CASE WHEN n.nspname='public' THEN 0 ELSE 1 END, n.nspname;
+          SQL
+
+          test -s "$SCHEMAS"
+
+          DUMP_ARGS=("$SOURCE_URL" --schema-only --no-owner)
+          while IFS= read -r s; do
+            [ -n "$s" ] || continue
+            DUMP_ARGS+=("--schema=$s")
+          done < "$SCHEMAS"
+
+          "$PG_DUMP" "${DUMP_ARGS[@]}" > "$RAW"
+          test -s "$RAW"
+
+          # V5 ke thua V4, nhung loc cac lenh khong portable khi restore project moi.
+          sed -i -E \
+            -e '/^CREATE SCHEMA public;[[:space:]]*$/d' \
+            -e '/^ALTER SCHEMA public /d' \
+            -e '/^\\(un)?restrict[[:space:]]/d' \
+            -e '/^SET transaction_timeout = 0;[[:space:]]*$/d' \
+            -e '/^ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin /d' \
+            "$RAW"
+
+          cp "$RAW" "$CANON"
+
+          {
+            echo '-- ========================================================================='
+            echo '-- V5 - SAO LƯU SOURCE VÀ PHỤC HỒI TỰ ĐỘNG'
+            echo '-- Kế thừa V4: public + audit + schema ứng dụng tùy chỉnh, ACL, RLS, trigger.'
+            echo '-- V5 loại default ACL của supabase_admin để phục hồi ổn định sang project mới.'
+            echo '-- Không chứa dữ liệu bảng hoặc dữ liệu mẫu.'
+            echo '-- ========================================================================='
+            echo
+            echo 'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;'
+            echo 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;'
+            echo
+            cat "$RAW"
+          } > "$V5_SQL_FILE"
+
+          if grep -Eq '^-- Data for Name: .*; Type: TABLE DATA;' "$V5_SQL_FILE"; then
+            echo "ERROR: File V5 co TABLE DATA."
+            exit 1
+          fi
+          if grep -Eq '^COPY[[:space:]].*[[:space:]]FROM[[:space:]]stdin;' "$V5_SQL_FILE"; then
+            echo "ERROR: File V5 co COPY table data."
+            exit 1
+          fi
+          if grep -Eq '^\\(un)?restrict[[:space:]]' "$V5_SQL_FILE"; then
+            echo "ERROR: File V5 con psql restrict/unrestrict."
+            exit 1
+          fi
+          if grep -Eq '^ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin ' "$V5_SQL_FILE"; then
+            echo "ERROR: File V5 con default ACL cua supabase_admin."
+            exit 1
+          fi
+
+          tables=$("${PSQL[@]}" -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname = ANY(ARRAY(SELECT x FROM unnest(string_to_array('$(paste -sd, "$SCHEMAS")',',')) x));")
+          functions=$("${PSQL[@]}" -c "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname = ANY(ARRAY(SELECT x FROM unnest(string_to_array('$(paste -sd, "$SCHEMAS")',',')) x));")
+          triggers=$("${PSQL[@]}" -c "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname = ANY(ARRAY(SELECT x FROM unnest(string_to_array('$(paste -sd, "$SCHEMAS")',',')) x));")
+          policies=$("${PSQL[@]}" -c "SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname = ANY(ARRAY(SELECT x FROM unnest(string_to_array('$(paste -sd, "$SCHEMAS")',',')) x));")
+          rls=$("${PSQL[@]}" -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND c.relrowsecurity AND n.nspname = ANY(ARRAY(SELECT x FROM unnest(string_to_array('$(paste -sd, "$SCHEMAS")',',')) x));")
+          rel_acl=$("${PSQL[@]}" -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relacl IS NOT NULL AND n.nspname = ANY(ARRAY(SELECT x FROM unnest(string_to_array('$(paste -sd, "$SCHEMAS")',',')) x));")
+          fn_acl=$("${PSQL[@]}" -c "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.proacl IS NOT NULL AND n.nspname = ANY(ARRAY(SELECT x FROM unnest(string_to_array('$(paste -sd, "$SCHEMAS")',',')) x));")
+          source_pg_major=$("${PSQL[@]}" -c "SELECT current_setting('server_version_num')::int / 10000;")
+          has_audit=$("${PSQL[@]}" -c "SELECT CASE WHEN EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='audit') THEN 1 ELSE 0 END;")
+
+          {
+            echo "tables=$tables"
+            echo "functions=$functions"
+            echo "triggers=$triggers"
+            echo "policies=$policies"
+            echo "rls=$rls"
+            echo "rel_acl=$rel_acl"
+            echo "fn_acl=$fn_acl"
+            echo "source_pg_major=$source_pg_major"
+            echo "has_audit=$has_audit"
+          } >> "$GITHUB_OUTPUT"
+
+          cp "$V5_SQL_FILE" "$V5_ARTIFACT_DIR/V5_khoi_tao_cau_truc_va_phuc_hoi.sql"
+          echo "V5 - TẠO FILE SAO LƯU CẤU TRÚC: ĐẠT"
+
+      - name: Khởi động Supabase local sạch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/v5-local
+          mkdir -p /tmp/v5-local
+          cd /tmp/v5-local
+          supabase init
+          supabase db start
+
+      - name: Kiểm thử phục hồi V5 trên Supabase local sạch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export PGPASSWORD=postgres
+          LOCAL_DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X --single-transaction -v ON_ERROR_STOP=1 \
+            -f "$V5_SQL_FILE"
+
+          check_count() {
+            local label="$1" query="$2" expected="$3"
+            local actual
+            actual=$(/usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -Atq -v ON_ERROR_STOP=1 -c "$query")
+            echo "$label=$actual expected=$expected"
+            test "$actual" = "$expected"
+          }
+
+          check_count tables "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname IN ('public','audit');" "${{ steps.inventory.outputs.tables }}"
+          check_count functions "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN ('public','audit');" "${{ steps.inventory.outputs.functions }}"
+          check_count triggers "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname IN ('public','audit');" "${{ steps.inventory.outputs.triggers }}"
+          check_count policies "SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','audit');" "${{ steps.inventory.outputs.policies }}"
+          check_count rls "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND c.relrowsecurity AND n.nspname IN ('public','audit');" "${{ steps.inventory.outputs.rls }}"
+
+          if [ "${{ steps.inventory.outputs.has_audit }}" = "1" ]; then
+            /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT to_regclass('audit.record_version') IS NOT NULL;" | grep -qx t
+            /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT to_regprocedure('audit.insert_update_delete_trigger()') IS NOT NULL;" | grep -qx t
+          fi
+
+          echo "V5 - KIỂM THỬ PHỤC HỒI LOCAL: ĐẠT"
+
+      - name: Lưu file SQL V5 riêng vào repository
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$V5_SQL_FILE"
+          if git diff --cached --quiet; then
+            echo "SQL V5 khong thay doi."
+          else
+            git commit -m "chore: cap nhat SQL V5 backup + restore ngay $(date -u +'%d-%m-%Y')"
+            git push origin HEAD:main
+          fi
+
+      - name: Đóng gói file V5 để dùng cho bước phục hồi
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v5-restore-package
+          path: |
+            /tmp/v5-artifact/V5_khoi_tao_cau_truc_va_phuc_hoi.sql
+            /tmp/v5-artifact/source_canon.sql
+            /tmp/v5-artifact/application_schemas.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  restore_new_target:
+    name: V5 - Phục hồi vào TARGET mới và kiểm tra
+    if: github.event_name == 'workflow_dispatch'
+    needs: build_and_local_verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cài PostgreSQL Client 17
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Tải gói SQL V5 đã được kiểm thử local
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: v5-restore-package
+          path: /tmp/v5-restore
+
+      - name: Kiểm tra SOURCE và TARGET trước khi phục hồi
+        id: preflight
+        shell: bash
+        env:
+          SOURCE_SECRET: ${{ secrets.SOURCE_DB_URL }}
+          TARGET_SECRET: ${{ secrets.TARGET_DB_URL }}
+        run: |
+          set -Eeuo pipefail
+          if [ -z "${SOURCE_SECRET:-}" ] || [ -z "${TARGET_SECRET:-}" ]; then
+            echo "ERROR: V5 can ca SOURCE_DB_URL va TARGET_DB_URL trong GitHub Actions Secrets."
+            exit 1
+          fi
+          echo "::add-mask::$SOURCE_SECRET"
+          echo "::add-mask::$TARGET_SECRET"
+
+          SOURCE_URL="${SOURCE_SECRET/:6543/:5432}"
+          TARGET_URL="${TARGET_SECRET/:6543/:5432}"
+          echo "::add-mask::$SOURCE_URL"
+          echo "::add-mask::$TARGET_URL"
+
+          identity() {
+            printf '%s' "$1" | sed -E 's#^[^:]+://([^:]+):[^@]*@([^/:?]+).*#\1@\2#'
+          }
+          SRC_ID=$(identity "$SOURCE_URL")
+          TGT_ID=$(identity "$TARGET_URL")
+          if [ -z "$SRC_ID" ] || [ -z "$TGT_ID" ] || [ "$SRC_ID" = "$TGT_ID" ]; then
+            echo "ERROR: SOURCE va TARGET giong nhau hoac khong xac dinh duoc danh tinh."
+            exit 1
+          fi
+
+          SRC_MAJOR=$(/usr/lib/postgresql/17/bin/psql "$SOURCE_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT current_setting('server_version_num')::int / 10000;")
+          TGT_MAJOR=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT current_setting('server_version_num')::int / 10000;")
+          if [ "$SRC_MAJOR" != "$TGT_MAJOR" ]; then
+            echo "ERROR: PostgreSQL major SOURCE=$SRC_MAJOR TARGET=$TGT_MAJOR khong khop."
+            exit 1
+          fi
+
+          # TARGET phai la project moi: khong co application objects trong public/audit/custom schemas.
+          TARGET_OBJECTS=$(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1 <<'SQL'
+          WITH app_schemas AS (
+            SELECT oid,nspname
+            FROM pg_namespace
+            WHERE nspname='public'
+               OR nspname='audit'
+               OR (
+                 nspname <> 'information_schema'
+                 AND nspname NOT LIKE 'pg_%'
+                 AND nspname NOT IN (
+                   'auth','storage','realtime','graphql','graphql_public','extensions',
+                   'pgbouncer','pgsodium','pgsodium_masks','vault','cron',
+                   'supabase_functions','supabase_migrations','net','_realtime','_analytics','public'
+                 )
+               )
+          )
+          SELECT
+            (SELECT count(*) FROM pg_class c JOIN app_schemas n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','v','m','S','f'))
+            +
+            (SELECT count(*) FROM pg_proc p JOIN app_schemas n ON n.oid=p.pronamespace)
+            +
+            (SELECT count(*) FROM app_schemas WHERE nspname NOT IN ('public'));
+          SQL
+          )
+          if [ "$TARGET_OBJECTS" != "0" ]; then
+            echo "ERROR: TARGET khong trong (application_objects=$TARGET_OBJECTS). V5 chi phuc hoi vao CSDL moi."
+            exit 1
+          fi
+
+          echo "SOURCE_URL=$SOURCE_URL" >> "$GITHUB_ENV"
+          echo "TARGET_URL=$TARGET_URL" >> "$GITHUB_ENV"
+          echo "V5 - KIỂM TRA TARGET TRƯỚC PHỤC HỒI: ĐẠT"
+
+      - name: Phục hồi V5 vào TARGET trong một transaction
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SQL_FILE="/tmp/v5-restore/V5_khoi_tao_cau_truc_va_phuc_hoi.sql"
+          test -s "$SQL_FILE"
+
+          /usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X \
+            --single-transaction \
+            --variable ON_ERROR_STOP=1 \
+            --file "$SQL_FILE"
+
+          echo "V5 - PHỤC HỒI TARGET ĐÃ COMMIT TRANSACTION"
+
+      - name: Kiểm tra TARGET sau khi phục hồi
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PSQL=(/usr/lib/postgresql/17/bin/psql "$TARGET_URL" -X -Atq -v ON_ERROR_STOP=1)
+
+          check_count() {
+            local label="$1" query="$2" expected="$3"
+            local actual
+            actual=$("${PSQL[@]}" -c "$query")
+            echo "$label=$actual expected=$expected"
+            if [ "$actual" != "$expected" ]; then
+              echo "ERROR: $label mismatch."
+              exit 1
+            fi
+          }
+
+          check_count tables "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname IN ('public','audit');" "${{ needs.build_and_local_verify.outputs.tables }}"
+          check_count functions "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN ('public','audit');" "${{ needs.build_and_local_verify.outputs.functions }}"
+          check_count triggers "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname IN ('public','audit');" "${{ needs.build_and_local_verify.outputs.triggers }}"
+          check_count policies "SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','audit');" "${{ needs.build_and_local_verify.outputs.policies }}"
+          check_count rls "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND c.relrowsecurity AND n.nspname IN ('public','audit');" "${{ needs.build_and_local_verify.outputs.rls }}"
+          check_count rel_acl "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relacl IS NOT NULL AND n.nspname IN ('public','audit');" "${{ needs.build_and_local_verify.outputs.rel_acl }}"
+          check_count fn_acl "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.proacl IS NOT NULL AND n.nspname IN ('public','audit');" "${{ needs.build_and_local_verify.outputs.fn_acl }}"
+
+          if [ "${{ needs.build_and_local_verify.outputs.has_audit }}" = "1" ]; then
+            "${PSQL[@]}" -c "SELECT to_regclass('audit.record_version') IS NOT NULL;" | grep -qx t
+            "${PSQL[@]}" -c "SELECT to_regprocedure('audit.insert_update_delete_trigger()') IS NOT NULL;" | grep -qx t
+          fi
+
+          "${PSQL[@]}" -c "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='pgcrypto');" | grep -qx t
+          "${PSQL[@]}" -c "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='uuid-ossp');" | grep -qx t
+
+          echo "V5 - KIỂM TRA TARGET SAU PHỤC HỒI: ĐẠT"
