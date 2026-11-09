@@ -147,6 +147,7 @@ jobs:
           sed -i -E \
             -e '/^CREATE SCHEMA public;[[:space:]]*$/d' \
             -e '/^ALTER SCHEMA public /d' \
+            -e 's/^CREATE SCHEMA ([^;]+);$/CREATE SCHEMA IF NOT EXISTS \\1;/' \
             -e '/^\\(un)?restrict[[:space:]]/d' \
             -e '/^SET transaction_timeout = 0;[[:space:]]*$/d' \
             -e '/^ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin /d' \
@@ -208,6 +209,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           cp "$V5_SQL_FILE" "$V5_ARTIFACT_DIR/V5_khoi_tao_cau_truc_va_phuc_hoi.sql"
+          if grep -Fxq 'CREATE SCHEMA audit;' "$V5_SQL_FILE"; then
+            echo "LỖI: File V5 vẫn còn CREATE SCHEMA audit; và sẽ lỗi 42P06 nếu audit đã tồn tại."
+            exit 1
+          fi
+          if [ "$has_audit" = "1" ]; then
+            grep -Fq 'CREATE SCHEMA IF NOT EXISTS audit;' "$V5_SQL_FILE" || {
+              echo "LỖI: File V5 chưa tạo audit theo dạng IF NOT EXISTS."
+              exit 1
+            }
+          fi
+
           echo "V5 - TẠO FILE SAO LƯU CẤU TRÚC: ĐẠT"
 
       - name: Khởi động Supabase local sạch
@@ -226,6 +238,11 @@ jobs:
           set -Eeuo pipefail
           export PGPASSWORD=postgres
           LOCAL_DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+
+          # Kiểm thử đúng tình huống người dùng vừa gặp: schema audit đã tồn tại sẵn.
+          /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X -v ON_ERROR_STOP=1 \
+            -c "CREATE SCHEMA IF NOT EXISTS audit;"
+
           /usr/lib/postgresql/17/bin/psql "$LOCAL_DB" -X --single-transaction -v ON_ERROR_STOP=1 \
             -f "$V5_SQL_FILE"
 
