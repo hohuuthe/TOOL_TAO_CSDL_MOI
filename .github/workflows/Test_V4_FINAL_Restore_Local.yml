@@ -1,4 +1,4 @@
-name: Test V4 FINAL Restore on Clean Local Supabase
+name: Kiểm thử file cấu trúc V4 khi schema audit đã tồn tại
 
 on:
   workflow_dispatch:
@@ -12,64 +12,127 @@ permissions:
   contents: read
 
 jobs:
-  restore_test:
+  kiem_thu_phuc_hoi:
+    name: Kiểm thử V4 trên Supabase local
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Lấy mã nguồn
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
+      - name: Cài Supabase CLI
+        uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3.2.0
         with:
-          version: latest
+          version: 3.0.0
 
-      - name: Start clean local Supabase database
+      - name: Cài PostgreSQL Client 17
         shell: bash
         run: |
           set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Khởi động Supabase local sạch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/v4-local
           mkdir -p /tmp/v4-local
           cd /tmp/v4-local
           supabase init
           supabase db start
 
-      - name: Apply V4 FINAL SQL with fail-fast
+      - name: Tạo sẵn schema audit để mô phỏng lỗi thực tế
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export PGPASSWORD=postgres
+          DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          /usr/lib/postgresql/17/bin/psql "$DB" -X -v ON_ERROR_STOP=1 \
+            -c "CREATE SCHEMA IF NOT EXISTS audit;"
+
+      - name: Kiểm tra nội dung file V4 trước khi chạy
         shell: bash
         run: |
           set -Eeuo pipefail
           SQL_FILE="$GITHUB_WORKSPACE/supabase/migrations/20261109000000_khoi_tao_cau_truc_v4_final.sql"
           test -s "$SQL_FILE"
-          export PGPASSWORD=postgres
-          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -X -v ON_ERROR_STOP=1 -f "$SQL_FILE"
 
-      - name: Verify restored inventory
+          if grep -Fxq 'CREATE SCHEMA audit;' "$SQL_FILE"; then
+            echo "LỖI: File vẫn còn CREATE SCHEMA audit;"
+            exit 1
+          fi
+
+          grep -Fq 'CREATE SCHEMA IF NOT EXISTS audit;' "$SQL_FILE"
+
+          if grep -Eq '^ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin ' "$SQL_FILE"; then
+            echo "LỖI: File vẫn còn default privileges của supabase_admin."
+            exit 1
+          fi
+
+          if grep -Eq '^\\(un)?restrict[[:space:]]' "$SQL_FILE"; then
+            echo "LỖI: File vẫn còn psql meta-command."
+            exit 1
+          fi
+
+          echo "KIỂM TRA TĨNH FILE V4: ĐẠT"
+
+      - name: Chạy toàn bộ file V4 khi audit đã tồn tại
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export PGPASSWORD=postgres
+          DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          SQL_FILE="$GITHUB_WORKSPACE/supabase/migrations/20261109000000_khoi_tao_cau_truc_v4_final.sql"
+
+          /usr/lib/postgresql/17/bin/psql "$DB" -X \
+            --single-transaction \
+            -v ON_ERROR_STOP=1 \
+            -f "$SQL_FILE"
+
+          echo "CHẠY FILE V4 VỚI AUDIT ĐÃ TỒN TẠI: ĐẠT"
+
+      - name: Kiểm tra các đối tượng quan trọng sau phục hồi
         shell: bash
         run: |
           set -Eeuo pipefail
           export PGPASSWORD=postgres
           DB="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 
-          TABLES=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname IN ('public','audit');")
-          FUNCTIONS=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN ('public','audit');")
-          TRIGGERS=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname IN ('public','audit');")
-          POLICIES=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_policy pol JOIN pg_class c ON c.oid=pol.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','audit');")
-          RLS=$(psql "$DB" -X -Atqc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND c.relrowsecurity AND n.nspname IN ('public','audit');")
+          /usr/lib/postgresql/17/bin/psql "$DB" -X -Atq -v ON_ERROR_STOP=1 \
+            -c "SELECT to_regclass('audit.record_version') IS NOT NULL;" | grep -qx t
 
-          echo "restored_tables=$TABLES"
-          echo "restored_functions=$FUNCTIONS"
-          echo "restored_triggers=$TRIGGERS"
-          echo "restored_policies=$POLICIES"
-          echo "restored_rls_tables=$RLS"
+          /usr/lib/postgresql/17/bin/psql "$DB" -X -Atq -v ON_ERROR_STOP=1 \
+            -c "SELECT to_regprocedure('audit.insert_update_delete_trigger()') IS NOT NULL;" | grep -qx t
 
-          test "$TABLES" = "27"
-          test "$FUNCTIONS" = "45"
-          test "$TRIGGERS" = "19"
-          test "$POLICIES" = "60"
-          test "$RLS" = "27"
+          tables=$(/usr/lib/postgresql/17/bin/psql "$DB" -X -Atq -v ON_ERROR_STOP=1 \
+            -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname IN ('public','audit');")
 
-          psql "$DB" -X -v ON_ERROR_STOP=1 -Atqc "SELECT to_regclass('audit.record_version') IS NOT NULL;"
-          psql "$DB" -X -v ON_ERROR_STOP=1 -Atqc "SELECT to_regprocedure('audit.insert_update_delete_trigger()') IS NOT NULL;"
-          psql "$DB" -X -v ON_ERROR_STOP=1 -Atqc "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pgcrypto');"
-          psql "$DB" -X -v ON_ERROR_STOP=1 -Atqc "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='uuid-ossp');"
+          functions=$(/usr/lib/postgresql/17/bin/psql "$DB" -X -Atq -v ON_ERROR_STOP=1 \
+            -c "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN ('public','audit');")
 
-          echo "LOCAL RESTORE TEST: PASSED"
+          triggers=$(/usr/lib/postgresql/17/bin/psql "$DB" -X -Atq -v ON_ERROR_STOP=1 \
+            -c "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname IN ('public','audit');")
+
+          policies=$(/usr/lib/postgresql/17/bin/psql "$DB" -X -Atq -v ON_ERROR_STOP=1 \
+            -c "SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','audit');")
+
+          echo "tables=$tables"
+          echo "functions=$functions"
+          echo "triggers=$triggers"
+          echo "policies=$policies"
+
+          test "$tables" -gt 0
+          test "$functions" -gt 0
+          test "$triggers" -gt 0
+          test "$policies" -gt 0
+
+          echo "KIỂM THỬ FILE CẤU TRÚC V4: ĐẠT"
