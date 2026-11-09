@@ -1,8 +1,8 @@
 -- =========================================================================
--- V5 - SOURCE BACKUP + AUTOMATIC RESTORE
--- Ke thua V4: public + audit + custom application schemas, ACL, RLS, trigger.
--- V5 loai default ACL cua supabase_admin de restore portable sang project moi.
--- Khong chua table data/seed.
+-- V5 - SAO LƯU SOURCE VÀ PHỤC HỒI TỰ ĐỘNG
+-- Kế thừa V4: public + audit + schema ứng dụng tùy chỉnh, ACL, RLS, trigger.
+-- V5 loại default ACL của supabase_admin để phục hồi ổn định sang project mới.
+-- Không chứa dữ liệu bảng hoặc dữ liệu mẫu.
 -- =========================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
