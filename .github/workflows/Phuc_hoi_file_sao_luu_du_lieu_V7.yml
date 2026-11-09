@@ -61,7 +61,7 @@ env:
 
 jobs:
   self_test_create_fixture:
-    name: V7 - Tự kiểm thử: tạo gói sao lưu giả lập đã mã hóa
+    name: "V7 - Tự kiểm thử: tạo gói sao lưu giả lập đã mã hóa"
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -99,7 +99,7 @@ jobs:
           retention-days: 1
 
   self_test_restore_fixture:
-    name: V7 - Tự kiểm thử: tải, giải mã, phục hồi và xác minh
+    name: "V7 - Tự kiểm thử: tải, giải mã, phục hồi và xác minh"
     if: github.event_name == 'push'
     needs: self_test_create_fixture
     runs-on: ubuntu-latest
