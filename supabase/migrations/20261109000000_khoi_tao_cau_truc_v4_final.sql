@@ -1,8 +1,8 @@
 -- =========================================================================
--- V4 FINAL - SOURCE-ONLY APPLICATION SCHEMA SNAPSHOT
+-- V4 - BẢN SAO LƯU CHỈ CẤU TRÚC TỪ CƠ SỞ DỮ LIỆU NGUỒN
 -- Bao gồm toàn bộ custom/application schemas của SOURCE_DB_URL. Không dùng TARGET_DB_URL.
 -- Không chứa dữ liệu mẫu/seed. Giữ ACL/GRANT/REVOKE của SOURCE.
--- Application schemas:
+-- Các schema ứng dụng:
 --   - public
 --   - audit
 -- =========================================================================
@@ -50,143 +50,69 @@ COMMENT ON SCHEMA public IS 'standard public schema';
 
 
 --
--- Name: operation; Type: TYPE; Schema: audit; Owner: -
---
-
-CREATE TYPE audit.operation AS ENUM (
-    'INSERT',
-    'UPDATE',
-    'DELETE',
-    'TRUNCATE'
-);
-
-
---
--- Name: cleanup_old_logs(integer, integer); Type: FUNCTION; Schema: audit; Owner: -
---
-
-CREATE FUNCTION audit.cleanup_old_logs(retention_days integer DEFAULT 30, batch_size integer DEFAULT 10000) RETURNS bigint
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'audit'
-    AS $$
-DECLARE
-    v_deleted_total bigint := 0;
-    v_deleted_batch int;
-    v_cutoff_date timestamptz;
-BEGIN
-    v_cutoff_date := now() - make_interval(days => retention_days);
-
-    LOOP
-        WITH rows_to_delete AS (
-            SELECT id
-            FROM audit.record_version
-            WHERE ts < v_cutoff_date
-            LIMIT batch_size
-            FOR UPDATE SKIP LOCKED
-        )
-        DELETE FROM audit.record_version rv
-        USING rows_to_delete rtd
-        WHERE rv.id = rtd.id;
-
-        GET DIAGNOSTICS v_deleted_batch = ROW_COUNT;
-        v_deleted_total := v_deleted_total + v_deleted_batch;
-
-        EXIT WHEN v_deleted_batch < batch_size;
-    END LOOP;
-
-    RETURN v_deleted_total;
-END;
-$$;
-
-
---
--- Name: disable_tracking(regclass); Type: FUNCTION; Schema: audit; Owner: -
---
-
-CREATE FUNCTION audit.disable_tracking(tbl regclass) RETURNS void
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'audit'
-    AS $$
-BEGIN
-    EXECUTE format('DROP TRIGGER IF EXISTS audit_i_u_d ON %s;', tbl);
-END;
-$$;
-
-
---
--- Name: enable_tracking(regclass); Type: FUNCTION; Schema: audit; Owner: -
---
-
-CREATE FUNCTION audit.enable_tracking(tbl regclass) RETURNS void
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'audit'
-    AS $$
-DECLARE
-    statement_row text := format('
-        CREATE TRIGGER audit_i_u_d
-        AFTER INSERT OR UPDATE OR DELETE ON %s
-        FOR EACH ROW EXECUTE FUNCTION audit.insert_update_delete_trigger();',
-        tbl
-    );
-    pkey_cols text[] := audit.primary_key_columns(tbl);
-BEGIN
-    IF pkey_cols = ARRAY[]::text[] THEN
-        RAISE EXCEPTION 'Bảng % bắt buộc phải có Khóa chính (Primary Key) để bật lịch sử', tbl;
-    END IF;
-
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = tbl AND tgname = 'audit_i_u_d') THEN
-        EXECUTE statement_row;
-    END IF;
-END;
-$$;
-
-
---
 -- Name: insert_update_delete_trigger(); Type: FUNCTION; Schema: audit; Owner: -
 --
 
 CREATE FUNCTION audit.insert_update_delete_trigger() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'audit'
+    SET search_path TO 'pg_catalog', 'public', 'audit', 'auth'
     AS $$
 DECLARE
-    pkey_cols text[] := audit.primary_key_columns(TG_RELID);
-    record_jsonb jsonb := to_jsonb(NEW);
-    record_id uuid := audit.to_record_id(TG_RELID, pkey_cols, record_jsonb);
-    old_record_jsonb jsonb := to_jsonb(OLD);
-    old_record_id uuid := audit.to_record_id(TG_RELID, pkey_cols, old_record_jsonb);
+    v_pkey_cols text[] := audit.primary_key_columns(TG_RELID);
+    v_record_id uuid;
+    v_old_record_id uuid;
+    v_new_record jsonb;
+    v_old_record jsonb;
 BEGIN
-    -- Tối ưu bổ sung: Nếu lệnh UPDATE không làm thay đổi bất kỳ giá trị nào thì bỏ qua, không ghi rác
-    IF TG_OP = 'UPDATE' AND record_jsonb = old_record_jsonb THEN
+    IF TG_OP = 'INSERT' THEN
+        v_new_record := to_jsonb(NEW);
+        v_record_id := audit.to_record_id(TG_RELID, v_pkey_cols, v_new_record);
+        
+        INSERT INTO audit.record_version (
+            record_id, old_record_id, op, ts,
+            table_oid, table_schema, table_name,
+            record, old_record, auth_uid, auth_role
+        ) VALUES (
+            v_record_id, NULL, TG_OP, now(),
+            TG_RELID, TG_TABLE_SCHEMA, TG_TABLE_NAME,
+            v_new_record, NULL, auth.uid(), auth.role()
+        );
         RETURN NEW;
+
+    ELSIF TG_OP = 'UPDATE' THEN
+        v_new_record := to_jsonb(NEW);
+        v_old_record := to_jsonb(OLD);
+        v_record_id := audit.to_record_id(TG_RELID, v_pkey_cols, v_new_record);
+        v_old_record_id := audit.to_record_id(TG_RELID, v_pkey_cols, v_old_record);
+
+        INSERT INTO audit.record_version (
+            record_id, old_record_id, op, ts,
+            table_oid, table_schema, table_name,
+            record, old_record, auth_uid, auth_role
+        ) VALUES (
+            v_record_id, v_old_record_id, TG_OP, now(),
+            TG_RELID, TG_TABLE_SCHEMA, TG_TABLE_NAME,
+            v_new_record, v_old_record, auth.uid(), auth.role()
+        );
+        RETURN NEW;
+
+    ELSIF TG_OP = 'DELETE' THEN
+        v_old_record := to_jsonb(OLD);
+        v_old_record_id := audit.to_record_id(TG_RELID, v_pkey_cols, v_old_record);
+
+        INSERT INTO audit.record_version (
+            record_id, old_record_id, op, ts,
+            table_oid, table_schema, table_name,
+            record, old_record, auth_uid, auth_role
+        ) VALUES (
+            NULL, v_old_record_id, TG_OP, now(),
+            TG_RELID, TG_TABLE_SCHEMA, TG_TABLE_NAME,
+            NULL, v_old_record, auth.uid(), auth.role()
+        );
+        RETURN OLD;
     END IF;
 
-    INSERT INTO audit.record_version(
-        record_id,
-        old_record_id,
-        op,
-        table_oid,
-        table_schema,
-        table_name,
-        record,
-        old_record,
-        auth_uid,
-        auth_role
-    )
-    VALUES (
-        record_id,
-        old_record_id,
-        TG_OP::audit.operation,
-        TG_RELID,
-        TG_TABLE_SCHEMA,
-        TG_TABLE_NAME,
-        record_jsonb,
-        old_record_jsonb,
-        auth.uid(),
-        auth.role()
-    );
-
-    RETURN COALESCE(NEW, OLD);
+    RETURN NULL;
 END;
 $$;
 
@@ -195,40 +121,32 @@ $$;
 -- Name: primary_key_columns(oid); Type: FUNCTION; Schema: audit; Owner: -
 --
 
-CREATE FUNCTION audit.primary_key_columns(entity_oid oid) RETURNS text[]
-    LANGUAGE sql STABLE SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'audit'
-    AS $_$
+CREATE FUNCTION audit.primary_key_columns(p_table_oid oid) RETURNS text[]
+    LANGUAGE sql STABLE
+    AS $$
     SELECT COALESCE(
-        array_agg(pa.attname::text ORDER BY pa.attnum),
-        ARRAY[]::text[]
-    )
-    FROM pg_index pi
-    JOIN pg_attribute pa ON pi.indrelid = pa.attrelid AND pa.attnum = ANY(pi.indkey)
-    WHERE pi.indrelid = $1 AND pi.indisprimary;
-$_$;
+        (SELECT array_agg(a.attname::text ORDER BY a.attnum)
+         FROM pg_index i
+         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+         WHERE i.indrelid = p_table_oid AND i.indisprimary),
+        ARRAY['id']::text[]
+    );
+$$;
 
 
 --
 -- Name: to_record_id(oid, text[], jsonb); Type: FUNCTION; Schema: audit; Owner: -
 --
 
-CREATE FUNCTION audit.to_record_id(entity_oid oid, pkey_cols text[], rec jsonb) RETURNS uuid
-    LANGUAGE sql STABLE SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'extensions', 'audit'
-    AS $_$
-    SELECT CASE
-        WHEN rec IS NULL THEN NULL
-        WHEN pkey_cols = ARRAY[]::text[] THEN extensions.uuid_generate_v4()
-        ELSE (
-            SELECT extensions.uuid_generate_v5(
-                'fd62bc3d-8d6e-43c2-919c-802ba3762271'::uuid,
-                ( jsonb_build_array(to_jsonb($1)) || jsonb_agg($3 ->> key_) )::text
-            )
-            FROM unnest($2) x(key_)
-        )
-    END;
-$_$;
+CREATE FUNCTION audit.to_record_id(p_table_oid oid, p_pkey_cols text[], p_record jsonb) RETURNS uuid
+    LANGUAGE plpgsql STABLE
+    AS $$
+BEGIN
+    RETURN (p_record ->> COALESCE(p_pkey_cols[1], 'id'))::uuid;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$;
 
 
 --
@@ -2999,15 +2917,15 @@ CREATE TABLE audit.record_version (
     id bigint NOT NULL,
     record_id uuid,
     old_record_id uuid,
-    op audit.operation NOT NULL,
-    ts timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    op text NOT NULL,
+    ts timestamp with time zone DEFAULT now() NOT NULL,
     table_oid oid NOT NULL,
-    table_schema name NOT NULL,
-    table_name name NOT NULL,
+    table_schema text DEFAULT 'public'::text NOT NULL,
+    table_name text NOT NULL,
     record jsonb,
     old_record jsonb,
-    auth_uid uuid DEFAULT auth.uid(),
-    auth_role text DEFAULT auth.role()
+    auth_uid uuid,
+    auth_role text
 );
 
 
@@ -3015,19 +2933,14 @@ CREATE TABLE audit.record_version (
 -- Name: record_version_id_seq; Type: SEQUENCE; Schema: audit; Owner: -
 --
 
-CREATE SEQUENCE audit.record_version_id_seq
+ALTER TABLE audit.record_version ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME audit.record_version_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: record_version_id_seq; Type: SEQUENCE OWNED BY; Schema: audit; Owner: -
---
-
-ALTER SEQUENCE audit.record_version_id_seq OWNED BY audit.record_version.id;
+    CACHE 1
+);
 
 
 --
@@ -3962,13 +3875,6 @@ CREATE TABLE public.xet_thidua (
 
 
 --
--- Name: record_version id; Type: DEFAULT; Schema: audit; Owner: -
---
-
-ALTER TABLE ONLY audit.record_version ALTER COLUMN id SET DEFAULT nextval('audit.record_version_id_seq'::regclass);
-
-
---
 -- Name: record_version record_version_pkey; Type: CONSTRAINT; Schema: audit; Owner: -
 --
 
@@ -4270,34 +4176,6 @@ ALTER TABLE ONLY public.vanban_doan
 
 ALTER TABLE ONLY public.xet_thidua
     ADD CONSTRAINT xet_thidua_pkey PRIMARY KEY (id);
-
-
---
--- Name: record_version_old_record_id; Type: INDEX; Schema: audit; Owner: -
---
-
-CREATE INDEX record_version_old_record_id ON audit.record_version USING btree (old_record_id) WHERE (old_record_id IS NOT NULL);
-
-
---
--- Name: record_version_record_id; Type: INDEX; Schema: audit; Owner: -
---
-
-CREATE INDEX record_version_record_id ON audit.record_version USING btree (record_id) WHERE (record_id IS NOT NULL);
-
-
---
--- Name: record_version_table_oid; Type: INDEX; Schema: audit; Owner: -
---
-
-CREATE INDEX record_version_table_oid ON audit.record_version USING btree (table_oid);
-
-
---
--- Name: record_version_ts; Type: INDEX; Schema: audit; Owner: -
---
-
-CREATE INDEX record_version_ts ON audit.record_version USING brin (ts);
 
 
 --
@@ -4714,10 +4592,10 @@ CREATE INDEX ngay_3_5_idx_ptdoanvien_dotdangki ON public.ptdoanvien USING btree 
 
 
 --
--- Name: chamdiem audit_i_u_d; Type: TRIGGER; Schema: public; Owner: -
+-- Name: chamdiem audit_chamdiem_trigger; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER audit_i_u_d AFTER INSERT OR DELETE OR UPDATE ON public.chamdiem FOR EACH ROW EXECUTE FUNCTION audit.insert_update_delete_trigger();
+CREATE TRIGGER audit_chamdiem_trigger AFTER INSERT OR DELETE OR UPDATE ON public.chamdiem FOR EACH ROW EXECUTE FUNCTION audit.insert_update_delete_trigger();
 
 
 --
@@ -5916,7 +5794,7 @@ GRANT ALL ON FUNCTION public.get_auth_role() TO service_role;
 -- Name: FUNCTION get_chamdiem_history(p_id text, p_limit integer, p_offset integer); Type: ACL; Schema: public; Owner: -
 --
 
-REVOKE ALL ON FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) TO anon;
 GRANT ALL ON FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) TO authenticated;
 GRANT ALL ON FUNCTION public.get_chamdiem_history(p_id text, p_limit integer, p_offset integer) TO service_role;
 
