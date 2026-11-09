@@ -101,7 +101,6 @@ jobs:
             "$MAINT_DB_URL"
             --schema-only
             --no-owner
-            --no-privileges
           )
 
           while IFS= read -r schema_name; do
@@ -116,10 +115,23 @@ jobs:
 
           # public đã tồn tại sẵn trên Supabase project mới. Không xóa CREATE
           # SCHEMA của audit/custom schema vì đó chính là nguyên nhân làm thiếu audit.
+          # Loại psql meta-command và SET transaction_timeout để file có thể chạy
+          # trực tiếp trong Supabase SQL Editor và tương thích rộng hơn.
           sed -i -E \
             -e '/^CREATE SCHEMA public;[[:space:]]*$/d' \
             -e '/^ALTER SCHEMA public /d' \
+            -e '/^\\(un)?restrict[[:space:]]/d' \
+            -e '/^SET transaction_timeout = 0;[[:space:]]*$/d' \
             "$SQL_FILE"
+
+          # Các function/default của SOURCE phụ thuộc pgcrypto và uuid-ossp.
+          {
+            echo 'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;'
+            echo 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;'
+            echo
+            cat "$SQL_FILE"
+          } > "${SQL_FILE}.portable"
+          mv "${SQL_FILE}.portable" "$SQL_FILE"
 
           # ------------------------------------------------------------------
           # 2. Gắn metadata vào đầu file SQL để biết chính xác schema nào đã dump.
@@ -128,7 +140,7 @@ jobs:
             echo '-- ========================================================================='
             echo '-- V4 FINAL - SOURCE-ONLY APPLICATION SCHEMA SNAPSHOT'
             echo '-- Bao gồm toàn bộ custom/application schemas của SOURCE_DB_URL. Không dùng TARGET_DB_URL.'
-            echo '-- Không chứa dữ liệu mẫu/seed.'
+            echo '-- Không chứa dữ liệu mẫu/seed. Giữ ACL/GRANT/REVOKE của SOURCE.'
             echo '-- Application schemas:'
             while IFS= read -r schema_name; do
               [ -n "$schema_name" ] || continue
@@ -209,6 +221,22 @@ jobs:
           fi
 
           echo "SCHEMA-ONLY DATA CHECK: PASSED"
+
+          if grep -Eq '^\\(un)?restrict[[:space:]]' "$SQL_FILE"; then
+            echo "ERROR: File còn psql meta-command restrict/unrestrict."
+            exit 1
+          fi
+          if grep -Eq '^SET transaction_timeout = 0;' "$SQL_FILE"; then
+            echo "ERROR: File còn SET transaction_timeout không portable."
+            exit 1
+          fi
+          grep -Fq 'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;' "$SQL_FILE"
+          grep -Fq 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;' "$SQL_FILE"
+          grep -Eq '^(GRANT|REVOKE|ALTER DEFAULT PRIVILEGES)' "$SQL_FILE" || {
+            echo "ERROR: File không chứa ACL/GRANT/REVOKE từ SOURCE."
+            exit 1
+          }
+          echo "PORTABILITY + ACL CHECK: PASSED"
 
           # ------------------------------------------------------------------
           # 5. Kiểm tra không còn seed/data mẫu.
