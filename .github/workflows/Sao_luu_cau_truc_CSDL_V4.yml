@@ -142,7 +142,7 @@ jobs:
           sed -i -E \
             -e '/^CREATE SCHEMA public;[[:space:]]*$/d' \
             -e '/^ALTER SCHEMA public /d' \
-            -e 's/^CREATE SCHEMA ([^;]+);$/CREATE SCHEMA IF NOT EXISTS \\1;/' \
+            -e 's/^CREATE SCHEMA ([^;]+);$/CREATE SCHEMA IF NOT EXISTS \1;/' \
             -e '/^ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin /d' \
             -e '/^\\(un)?restrict[[:space:]]/d' \
             -e '/^SET transaction_timeout = 0;[[:space:]]*$/d' \
