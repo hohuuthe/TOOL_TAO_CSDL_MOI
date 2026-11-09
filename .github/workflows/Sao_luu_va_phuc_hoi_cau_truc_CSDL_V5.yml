@@ -32,7 +32,7 @@ on:
       - '.github/workflows/Sao_luu_va_phuc_hoi_cau_truc_CSDL_V5.yml'
 
 concurrency:
-  group: supabase-clone-v5
+  group: supabase-ghi-file-sao-luu
   cancel-in-progress: false
 
 permissions:
@@ -258,9 +258,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- "$V5_SQL_FILE"
           if git diff --cached --quiet; then
-            echo "SQL V5 khong thay doi."
+            echo "File SQL V5 không thay đổi."
           else
-            git commit -m "chore: cap nhat SQL V5 backup + restore ngay $(date -u +'%d-%m-%Y')"
+            git commit -m "chore: cập nhật SQL V5 ngày $(date -u +'%d-%m-%Y')"
+            # Đồng bộ với nhánh main mới nhất trước khi đẩy để tránh lỗi non-fast-forward.
+            git fetch origin main
+            git rebase origin/main
             git push origin HEAD:main
           fi
 
