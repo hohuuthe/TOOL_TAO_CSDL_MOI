@@ -1,0 +1,294 @@
+# =============================================================================
+# V4 - SAO LƯU CẤU TRÚC CƠ SỞ DỮ LIỆU SUPABASE
+#
+# Mục đích:
+#   - Chỉ sao lưu CẤU TRÚC từ cơ sở dữ liệu nguồn SOURCE_DB_URL.
+#   - Bao gồm bảng, hàm, trigger, policy RLS, audit và quyền ACL/GRANT/REVOKE.
+#   - Không sao lưu dữ liệu bản ghi.
+#
+# Hướng dẫn sử dụng:
+#   1. Khai báo GitHub Actions Secret: SOURCE_DB_URL.
+#   2. Vào GitHub Actions và chạy thủ công workflow V4.
+#   3. File SQL kết quả được lưu trong thư mục supabase/migrations.
+#
+# Lưu ý:
+#   - Các tên kỹ thuật như SOURCE_DB_URL, psql, pg_dump, RLS, ACL được giữ nguyên
+#     vì đó là cú pháp/chỉ danh kỹ thuật bắt buộc.
+# =============================================================================
+
+name: V4 - Sao lưu cấu trúc cơ sở dữ liệu Supabase
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/Sao_luu_cau_truc_CSDL_V4.yml'
+
+jobs:
+  quy_trinh_nhan_ban:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Kiểm tra mã nguồn (Checkout)
+        uses: actions/checkout@v4
+
+      - name: Cài đặt PostgreSQL Client 17
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Khởi tạo thư mục
+        run: mkdir -p supabase/migrations
+
+      - name: Sao lưu đầy đủ cấu trúc ứng dụng và Audit
+        env:
+          DB_URL: ${{ secrets.SOURCE_DB_URL }}
+        run: |
+          set -euo pipefail
+
+          SQL_FILE="supabase/migrations/20261109000000_khoi_tao_cau_truc_v4_final.sql"
+          SCHEMA_LIST_FILE="/tmp/application_schemas.txt"
+          AUDIT_TRIGGER_LIST_FILE="/tmp/audit_triggers.txt"
+
+          if [ -z "${DB_URL:-}" ]; then
+            echo "ERROR: SOURCE_DB_URL chưa được cấu hình."
+            exit 1
+          fi
+
+          # Supabase transaction pooler (:6543) không phù hợp cho các tác vụ dump dài.
+          # Chuyển cùng host sang session pooler (:5432), giữ nguyên toàn bộ thông tin còn lại.
+          MAINT_DB_URL="${DB_URL/:6543/:5432}"
+          if [ "$MAINT_DB_URL" != "$DB_URL" ]; then
+            echo "KẾT NỐI BẢO TRÌ: phát hiện :6543; dùng session pooler :5432 cho pg_dump/psql."
+          fi
+
+          PSQL=(/usr/bin/psql "$MAINT_DB_URL" -X -v ON_ERROR_STOP=1 -Atq)
+          PG_DUMP=/usr/lib/postgresql/17/bin/pg_dump
+
+          # ------------------------------------------------------------------
+          # 1. Tự phát hiện TOÀN BỘ schema ứng dụng/custom của nguồn.
+          #    Không chỉ public. Schema audit và các custom schema khác sẽ được
+          #    mang theo nguyên bản. Các schema do Supabase/PostgreSQL quản lý
+          #    được loại khỏi file migration cấu trúc ứng dụng.
+          # ------------------------------------------------------------------
+          "${PSQL[@]}" <<'SQL' > "$SCHEMA_LIST_FILE"
+          SELECT n.nspname
+          FROM pg_namespace n
+          WHERE n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN (
+              'auth',
+              'storage',
+              'realtime',
+              'graphql',
+              'graphql_public',
+              'extensions',
+              'pgbouncer',
+              'pgsodium',
+              'pgsodium_masks',
+              'vault',
+              'cron',
+              'supabase_functions',
+              'supabase_migrations',
+              'net',
+              '_realtime',
+              '_analytics'
+            )
+          ORDER BY CASE WHEN n.nspname = 'public' THEN 0 ELSE 1 END, n.nspname;
+          SQL
+
+          if [ ! -s "$SCHEMA_LIST_FILE" ]; then
+            echo "ERROR: Không phát hiện được schema ứng dụng nào trong CSDL nguồn."
+            exit 1
+          fi
+
+          echo "Các schema ứng dụng sẽ được sao lưu:"
+          sed 's/^/  - /' "$SCHEMA_LIST_FILE"
+
+          DUMP_ARGS=(
+            "$MAINT_DB_URL"
+            --schema-only
+            --no-owner
+          )
+
+          while IFS= read -r schema_name; do
+            [ -n "$schema_name" ] || continue
+            DUMP_ARGS+=("--schema=${schema_name}")
+          done < "$SCHEMA_LIST_FILE"
+
+          # Một lần pg_dump duy nhất với tất cả application schemas để pg_dump
+          # tự sắp xếp dependency giữa public <-> audit <-> custom schemas.
+          "$PG_DUMP" "${DUMP_ARGS[@]}" > "$SQL_FILE"
+          test -s "$SQL_FILE"
+
+          # public đã tồn tại sẵn trên Supabase project mới. Không xóa CREATE
+          # SCHEMA của audit/custom schema vì đó chính là nguyên nhân làm thiếu audit.
+          # Loại psql meta-command và SET transaction_timeout để file có thể chạy
+          # trực tiếp trong Supabase SQL Editor và tương thích rộng hơn.
+          sed -i -E \
+            -e '/^CREATE SCHEMA public;[[:space:]]*$/d' \
+            -e '/^ALTER SCHEMA public /d' \
+            -e '/^\\(un)?restrict[[:space:]]/d' \
+            -e '/^SET transaction_timeout = 0;[[:space:]]*$/d' \
+            "$SQL_FILE"
+
+          # Các function/default của SOURCE phụ thuộc pgcrypto và uuid-ossp.
+          {
+            echo 'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;'
+            echo 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;'
+            echo
+            cat "$SQL_FILE"
+          } > "${SQL_FILE}.portable"
+          mv "${SQL_FILE}.portable" "$SQL_FILE"
+
+          # ------------------------------------------------------------------
+          # 2. Gắn metadata vào đầu file SQL để biết chính xác schema nào đã dump.
+          # ------------------------------------------------------------------
+          {
+            echo '-- ========================================================================='
+            echo '-- V4 - BẢN SAO LƯU CHỈ CẤU TRÚC TỪ CƠ SỞ DỮ LIỆU NGUỒN'
+            echo '-- Bao gồm toàn bộ custom/application schemas của SOURCE_DB_URL. Không dùng TARGET_DB_URL.'
+            echo '-- Không chứa dữ liệu mẫu/seed. Giữ ACL/GRANT/REVOKE của SOURCE.'
+            echo '-- Các schema ứng dụng:'
+            while IFS= read -r schema_name; do
+              [ -n "$schema_name" ] || continue
+              echo "--   - ${schema_name}"
+            done < "$SCHEMA_LIST_FILE"
+            echo '-- ========================================================================='
+            echo
+            cat "$SQL_FILE"
+          } > "${SQL_FILE}.tmp"
+          mv "${SQL_FILE}.tmp" "$SQL_FILE"
+
+          # ------------------------------------------------------------------
+          # 3. HARD GATE cho AUDIT nếu SOURCE có schema audit.
+          #    Không dùng audit mẫu để ghi đè audit thật của nguồn.
+          # ------------------------------------------------------------------
+          SOURCE_HAS_AUDIT=$("${PSQL[@]}" -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='audit') THEN '1' ELSE '0' END;")
+
+          if [ "$SOURCE_HAS_AUDIT" = "1" ]; then
+            echo "AUDIT: SOURCE có schema audit; kiểm tra độ phủ audit trong file dump..."
+
+            SOURCE_HAS_RECORD_VERSION=$("${PSQL[@]}" -c "SELECT CASE WHEN to_regclass('audit.record_version') IS NOT NULL THEN '1' ELSE '0' END;")
+            SOURCE_HAS_PK_FN=$("${PSQL[@]}" -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='audit' AND p.proname='primary_key_columns') THEN '1' ELSE '0' END;")
+            SOURCE_HAS_TO_RECORD_FN=$("${PSQL[@]}" -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='audit' AND p.proname='to_record_id') THEN '1' ELSE '0' END;")
+            SOURCE_HAS_AUDIT_FN=$("${PSQL[@]}" -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='audit' AND p.proname='insert_update_delete_trigger') THEN '1' ELSE '0' END;")
+
+            if [ "$SOURCE_HAS_RECORD_VERSION" = "1" ]; then
+              grep -Eq 'CREATE TABLE audit\.record_version|CREATE TABLE IF NOT EXISTS audit\.record_version' "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit.record_version nhưng file SQL không chứa bảng này."
+                exit 1
+              }
+            fi
+
+            if [ "$SOURCE_HAS_PK_FN" = "1" ]; then
+              grep -Eq 'CREATE (OR REPLACE )?FUNCTION audit\.primary_key_columns\(' "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit.primary_key_columns() nhưng file SQL bị thiếu hàm này."
+                exit 1
+              }
+            fi
+
+            if [ "$SOURCE_HAS_TO_RECORD_FN" = "1" ]; then
+              grep -Eq 'CREATE (OR REPLACE )?FUNCTION audit\.to_record_id\(' "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit.to_record_id() nhưng file SQL bị thiếu hàm này."
+                exit 1
+              }
+            fi
+
+            if [ "$SOURCE_HAS_AUDIT_FN" = "1" ]; then
+              grep -Eq 'CREATE (OR REPLACE )?FUNCTION audit\.insert_update_delete_trigger\(' "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit.insert_update_delete_trigger() nhưng file SQL bị thiếu hàm này."
+                exit 1
+              }
+            fi
+
+            # Liệt kê mọi trigger ở application tables đang gọi hàm audit và
+            # bắt buộc từng trigger phải xuất hiện trong schema dump.
+            "${PSQL[@]}" -c "SELECT quote_ident(t.tgname) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace cn ON cn.oid=c.relnamespace JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace pn ON pn.oid=p.pronamespace WHERE NOT t.tgisinternal AND pn.nspname='audit' AND p.proname='insert_update_delete_trigger' AND cn.nspname <> 'information_schema' AND cn.nspname NOT LIKE 'pg_%' ORDER BY cn.nspname, c.relname, t.tgname;" > "$AUDIT_TRIGGER_LIST_FILE"
+
+            while IFS= read -r trigger_name; do
+              [ -n "$trigger_name" ] || continue
+              grep -Fq "TRIGGER ${trigger_name} " "$SQL_FILE" || {
+                echo "ERROR: SOURCE có audit trigger [${trigger_name}] nhưng file SQL không chứa trigger này."
+                exit 1
+              }
+            done < "$AUDIT_TRIGGER_LIST_FILE"
+
+            echo "KIỂM TRA ĐỘ PHỦ AUDIT: ĐẠT"
+          else
+            echo "AUDIT WARNING: SOURCE không có schema audit. File cấu trúc sẽ không tự bịa/ghi đè audit khác với nguồn."
+          fi
+
+          # ------------------------------------------------------------------
+          # 4. Xác nhận đây là schema-only theo marker của pg_dump.
+          #    DML nằm bên trong thân hàm PL/pgSQL không được xem là table data.
+          # ------------------------------------------------------------------
+          if grep -Eq '^-- Data for Name: .*; Type: TABLE DATA;' "$SQL_FILE"; then
+            echo "ERROR: Phát hiện TABLE DATA section trong file schema-only."
+            exit 1
+          fi
+
+          echo "KIỂM TRA FILE CHỈ CÓ CẤU TRÚC: ĐẠT"
+
+          if grep -Eq '^\\(un)?restrict[[:space:]]' "$SQL_FILE"; then
+            echo "ERROR: File còn psql meta-command restrict/unrestrict."
+            exit 1
+          fi
+          if grep -Eq '^SET transaction_timeout = 0;' "$SQL_FILE"; then
+            echo "ERROR: File còn SET transaction_timeout không portable."
+            exit 1
+          fi
+          grep -Fq 'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;' "$SQL_FILE"
+          grep -Fq 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;' "$SQL_FILE"
+          grep -Eq '^(GRANT|REVOKE|ALTER DEFAULT PRIVILEGES)' "$SQL_FILE" || {
+            echo "ERROR: File không chứa ACL/GRANT/REVOKE từ SOURCE."
+            exit 1
+          }
+          echo "KIỂM TRA TÍNH TƯƠNG THÍCH VÀ ACL: ĐẠT"
+
+          # ------------------------------------------------------------------
+          # 5. Kiểm tra không còn seed/data mẫu.
+          # ------------------------------------------------------------------
+          if grep -Eq '^INSERT INTO public\.(taikhoan|duytricsdl|github_settings)' "$SQL_FILE"; then
+            echo "ERROR: Phát hiện dữ liệu seed trong file schema-only."
+            exit 1
+          fi
+
+          # Kiểm tra nhanh số lượng object application thật ở nguồn để log chẩn đoán.
+          "${PSQL[@]}" <<'SQL'
+          SELECT 'application_tables=' || count(*)
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE c.relkind IN ('r','p')
+            AND n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+
+          SELECT 'application_functions=' || count(*)
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname <> 'information_schema'
+            AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname NOT IN ('auth','storage','realtime','graphql','graphql_public','extensions','pgbouncer','pgsodium','pgsodium_masks','vault','cron','supabase_functions','supabase_migrations','net','_realtime','_analytics');
+          SQL
+
+          echo "OK: Đã tạo file cấu trúc application schemas + audit: $SQL_FILE"
+
+      - name: Lưu trữ bản mẫu
+        run: |
+          set -euo pipefail
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add supabase/migrations/20261109000000_khoi_tao_cau_truc_v4_final.sql
+          git commit -m "chore: cập nhật SQL V4 FINAL từ SOURCE ngày $(date +'%d-%m-%Y')" || echo "Không có thay đổi"
+          git push
