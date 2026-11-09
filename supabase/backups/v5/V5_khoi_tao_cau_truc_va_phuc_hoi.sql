@@ -31,7 +31,7 @@ SET row_security = off;
 -- Name: audit; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA audit;
+CREATE SCHEMA IF NOT EXISTS audit;
 
 
 --
